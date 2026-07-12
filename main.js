@@ -46,8 +46,116 @@ function deriveViewStatus(outcome, msg) {
   }
 }
 
+// src/git.js
+var READ_ENV = Object.freeze({ LC_ALL: "C", LANG: "C", GIT_OPTIONAL_LOCKS: "0" });
+var WRITE_ENV = Object.freeze({ LC_ALL: "C", LANG: "C" });
+var READ_TIMEOUT_MS = 3e4;
+var WRITE_TIMEOUT_MS = 18e4;
+var NOT_REPO_RE = /not a git repository/i;
+function parseWorktreeList(stdout) {
+  const list = [];
+  let cur = null;
+  for (const rec of String(stdout).split("\0")) {
+    if (rec === "") {
+      if (cur) list.push(cur);
+      cur = null;
+      continue;
+    }
+    const sp = rec.indexOf(" ");
+    const key = sp < 0 ? rec : rec.slice(0, sp);
+    const val = sp < 0 ? void 0 : rec.slice(sp + 1);
+    if (key === "worktree") {
+      if (cur) list.push(cur);
+      cur = { path: val ?? "" };
+    } else if (cur) {
+      if (key === "HEAD") cur.head = val ?? "";
+      else if (key === "branch") cur.branch = (val ?? "").replace(/^refs\/heads\//, "");
+      else if (key === "detached") cur.detached = true;
+      else if (key === "bare") cur.bare = true;
+      else if (key === "locked") cur.locked = val ?? "";
+      else if (key === "prunable") cur.prunable = val ?? "";
+    }
+  }
+  if (cur) list.push(cur);
+  return list;
+}
+function gitFail(r) {
+  return { ok: false, code: "GIT_ERROR", message: r.stderr || `git exit ${r.code}` };
+}
+function makeGit(processApi) {
+  function run({ cwd, args, write = false, timeoutMs }) {
+    return new Promise((resolve, reject) => {
+      const limit = timeoutMs ?? (write ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS);
+      const dec = new TextDecoder();
+      let out = "";
+      let err = "";
+      let done = false;
+      let timer = null;
+      processApi.spawn("git", args, { cwd, env: write ? { ...WRITE_ENV } : { ...READ_ENV } }).then((handle) => {
+        const subs = [];
+        const finish = (fn, v) => {
+          if (done) return;
+          done = true;
+          if (timer) clearTimeout(timer);
+          for (const s of subs) s.dispose();
+          fn(v);
+        };
+        timer = setTimeout(() => {
+          void processApi.kill(handle);
+          finish(reject, new Error(`git ${args[0] ?? ""} timeout ${limit}ms`));
+        }, limit);
+        subs.push(
+          processApi.onData(handle, (b) => out += dec.decode(b, { stream: true })),
+          processApi.onStderr(handle, (b) => err += new TextDecoder().decode(b)),
+          processApi.onExit(handle, (code) => finish(resolve, { code, stdout: out, stderr: err.trim() }))
+        );
+      }).catch((e) => {
+        if (!done) {
+          done = true;
+          if (timer) clearTimeout(timer);
+          reject(e instanceof Error ? e : new Error(String(e)));
+        }
+      });
+    });
+  }
+  return {
+    run,
+    // Tri-state repository root discovery: repo (with root), not-repo, or error.
+    async root(cwd) {
+      try {
+        const r = await run({ cwd, args: ["rev-parse", "--show-toplevel"] });
+        if (r.code === 0) return { state: "repo", root: r.stdout.trim() };
+        if (NOT_REPO_RE.test(r.stderr)) return { state: "not-repo" };
+        return { state: "error", error: r.stderr };
+      } catch (e) {
+        return { state: "error", error: String(e?.message ?? e) };
+      }
+    },
+    // Create a worktree on a new branch. Failure is the canonical envelope (MESSAGE-PROTOCOL).
+    async worktreeAdd({ repoRoot, branch, dir, base = "HEAD" }) {
+      const r = await run({
+        cwd: repoRoot,
+        args: ["worktree", "add", "--no-track", "-b", branch, "--", dir, base],
+        write: true
+      });
+      if (r.code !== 0) return gitFail(r);
+      return { ok: true, dir, branch, base };
+    },
+    // Remove a worktree checkout (git refuses when it has uncommitted changes — the branch survives).
+    async worktreeRemove({ repoRoot, dir }) {
+      const r = await run({ cwd: repoRoot, args: ["worktree", "remove", "--", dir], write: true });
+      if (r.code !== 0) return gitFail(r);
+      return { ok: true, removed: dir };
+    },
+    async worktreeList(repoRoot) {
+      const r = await run({ cwd: repoRoot, args: ["worktree", "list", "--porcelain", "-z"] });
+      if (r.code !== 0) return gitFail(r);
+      return { ok: true, worktrees: parseWorktreeList(r.stdout) };
+    }
+  };
+}
+
 // src/index.js
-var GITCORE = "plugin.soksak-plugin-git-core";
 var COLL = "workspace";
 var SCOPE = "index";
 function h(tag, style, text) {
@@ -65,6 +173,7 @@ var index_default = {
     const err = (code, message) => ({ ok: false, code, message });
     const msg = (en, ko) => (typeof app.locale === "function" ? app.locale() : "en") === "ko" ? ko : en;
     const reg = (name, spec) => ctx.subscriptions.push(app.commands.register(name, spec));
+    const git = makeGit(app.process);
     void app.data.define(COLL, { indexes: ["slug", "repoRoot", "windowLabel", "createdAt"] });
     const loadRecords = async () => {
       const rows = await app.data.query(COLL, { scope: SCOPE, order: "createdAt" });
@@ -80,12 +189,15 @@ var index_default = {
       createdAt: r.createdAt
     });
     async function resolveRepoRoot(repoPath) {
-      const out = await app.commands.execute(`${GITCORE}.root`, repoPath ? { path: repoPath } : {});
-      if (!out.ok) return { ok: false, out };
-      if (out.data?.state !== "repo") {
+      if (!repoPath) {
+        return { ok: false, out: err("NO_PATH", msg("no repository path \u2014 pass path or open a project", "\uC800\uC7A5\uC18C \uACBD\uB85C \uC5C6\uC74C \u2014 path \uB97C \uC8FC\uAC70\uB098 \uD504\uB85C\uC81D\uD2B8\uB97C \uC5EC\uC138\uC694")) };
+      }
+      const st = await git.root(repoPath);
+      if (st.state === "repo") return { ok: true, root: st.root };
+      if (st.state === "not-repo") {
         return { ok: false, out: err("NOT_REPO", msg("not a git repository", "git \uC800\uC7A5\uC18C\uAC00 \uC544\uB2D9\uB2C8\uB2E4")) };
       }
-      return { ok: true, root: out.data.root };
+      return { ok: false, out: err("GIT_ERROR", st.error || msg("git error", "git \uC624\uB958")) };
     }
     async function resolveTerminalProgram() {
       const out = await app.commands.execute("program.list");
@@ -93,7 +205,7 @@ var index_default = {
       return ids.includes("terminal-xterm") ? "terminal-xterm" : ids[0] || "terminal-xterm";
     }
     reg("worktree.open", {
-      description: "Open a worktree workspace. Given a branch name or issue slug, create the branch and a git worktree (via git-core), then open a project on the worktree with a terminal as its first view (cwd = the worktree). Idempotent: opening a workspace that already exists activates it instead of creating a second one.",
+      description: "Open a worktree workspace. Given a branch name or issue slug, create the branch and a git worktree, then open a project on the worktree with a terminal as its first view (cwd = the worktree). Idempotent: opening a workspace that already exists activates it instead of creating a second one.",
       triggers: { ko: "\uC6CC\uD06C\uD2B8\uB9AC \uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 \uC5F4\uAE30 \uBE0C\uB79C\uCE58 \uC0C8 \uC791\uC5C5 \uC0DD\uC131 \uC6CC\uD06C\uD2B8\uB9AC" },
       params: {
         name: { type: "string", description: "Branch name or issue slug for the workspace", required: true },
@@ -133,21 +245,22 @@ var index_default = {
           });
           return { reused: true, slug: record.slug, branch: record.branch, worktreeDir: record.worktreeDir, project: projectId2, window: windowLabel2 };
         }
-        const add = await app.commands.execute(`${GITCORE}.worktree.add`, {
-          path: repoRoot,
+        const dir = `${repoRoot}-wt/${plan.slug}`;
+        const add = await git.worktreeAdd({
+          repoRoot,
           branch: plan.branch,
-          ...typeof p.base === "string" && p.base ? { base: p.base } : {}
+          dir,
+          base: typeof p.base === "string" && p.base ? p.base : "HEAD"
         });
         if (!add.ok) return err(add.code, add.message);
-        const dir = add.data.dir;
         const po = await app.commands.execute("project.open", { root: dir, program: termProgram });
         if (!po.ok) return err(po.code, po.message);
         const projectId = po.data?.projectId ?? null;
         const windowLabel = po.data?.routedWindow || po.data?.existingWindow || app.windowLabel?.() || null;
         const rec = {
           slug: plan.slug,
-          branch: add.data.branch ?? plan.branch,
-          base: add.data.base ?? null,
+          branch: add.branch ?? plan.branch,
+          base: add.base ?? null,
           repoRoot,
           worktreeDir: dir,
           projectId,
@@ -164,7 +277,7 @@ var index_default = {
       }
     });
     reg("worktree.close", {
-      description: "Close a worktree workspace: close its project surface and remove the worktree checkout via git-core. The branch and its commits are not touched. Idempotent \u2014 an absent workspace is a no-op. Refuses when the worktree has uncommitted changes (git's protection); commit or discard first.",
+      description: "Close a worktree workspace: close its project surface and remove the worktree checkout. The branch and its commits are not touched. Idempotent \u2014 an absent workspace is a no-op. Refuses when the worktree has uncommitted changes (git's protection); commit or discard first.",
       triggers: { ko: "\uC6CC\uD06C\uD2B8\uB9AC \uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 \uB2EB\uAE30 \uD68C\uC218 \uC6CC\uD06C\uD2B8\uB9AC \uC81C\uAC70" },
       params: {
         name: { type: "string", description: "The same branch name or slug used to open the workspace", required: true }
@@ -185,13 +298,10 @@ var index_default = {
           if (proj) projectId = proj.id;
         }
         if (projectId) await app.commands.execute("project.close", { project: projectId });
-        const rm = await app.commands.execute(`${GITCORE}.worktree.remove`, {
-          path: record.repoRoot,
-          dir: record.worktreeDir
-        });
+        const rm = await git.worktreeRemove({ repoRoot: record.repoRoot, dir: record.worktreeDir });
         if (!rm.ok) {
-          const wl = await app.commands.execute(`${GITCORE}.worktree.list`, { path: record.repoRoot });
-          const stillThere = wl.ok && (wl.data?.worktrees ?? []).some((w) => w.path === record.worktreeDir);
+          const wl = await git.worktreeList(record.repoRoot);
+          const stillThere = wl.ok && wl.worktrees.some((w) => w.path === record.worktreeDir);
           if (stillThere) return err(rm.code, rm.message);
         }
         await app.data.delete(COLL, slug, { scope: SCOPE });

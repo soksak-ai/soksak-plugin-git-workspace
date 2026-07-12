@@ -69,7 +69,7 @@ async function main() {
 
   step("pre-clean", "reclaim any leftover from a prior run (idempotent)");
   sok(`${PLUGIN}.worktree.close`, { name: NAME }, { window: repoWin });
-  sok(`${GITCORE()}.worktree.remove.force`, { path: REPO, dir: WT }, { window: repoWin });
+  git(["worktree", "remove", "--force", WT]);
   git(["worktree", "prune"]);
   if (existsSync(WT)) rmSync(WT, { recursive: true, force: true });
   git(["branch", "-D", BRANCH]);
@@ -146,10 +146,6 @@ async function main() {
   assert.ok(c2.ok && c2.data.closed === false, "second close must be a no-op");
 
   console.log(`\nALL GATES PASSED. snapshot: ${SNAP}`);
-}
-
-function GITCORE() {
-  return "plugin.soksak-plugin-git-core";
 }
 
 main().catch((e) => {

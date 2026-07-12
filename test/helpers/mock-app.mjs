@@ -64,6 +64,7 @@ export function mockApp(opts = {}) {
         return { dispose() {} };
       },
     },
+    process: opts.process,
   };
 
   const ctx = { app, manifest: opts.manifest ?? {}, subscriptions: [] };

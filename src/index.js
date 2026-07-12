@@ -1,12 +1,13 @@
 // soksak-plugin-git-workspace — worktree workspaces (branch + worktree + surface + terminal).
-// Owns no git execution: worktree add/list/remove and repository-root discovery are delegated
-// to soksak-plugin-git-core (declared dependency). The workspace surface is a project opened on
-// the worktree with a terminal as its first view (cwd = the worktree), driven through core
-// registry commands. Workspace records persist in the core data store ("data" permission).
-// External data (paths/branches) is inserted with textContent only — no innerHTML for content.
+// Owns its git execution: worktree add/remove/list and repository-root discovery run the git CLI
+// directly through the process capability (no dependency on another plugin — coupling 0). The
+// workspace surface is a project opened on the worktree with a terminal as its first view
+// (cwd = the worktree), driven through core registry commands. Workspace records persist in the
+// core data store ("data" permission). External data (paths/branches) is inserted with
+// textContent only — no innerHTML for content.
 import { normalizeBranch, slugKey, planOpen, deriveViewStatus } from "./plan.js";
+import { makeGit } from "./git.js";
 
-const GITCORE = "plugin.soksak-plugin-git-core";
 const COLL = "workspace";
 const SCOPE = "index"; // one partition — a global registry of open worktree workspaces
 
@@ -30,6 +31,7 @@ const index_default = {
     // message resolves to the host language (docs/I18N.md — human surface {en,ko}).
     const msg = (en, ko) => ((typeof app.locale === "function" ? app.locale() : "en") === "ko" ? ko : en);
     const reg = (name, spec) => ctx.subscriptions.push(app.commands.register(name, spec));
+    const git = makeGit(app.process); // git CLI, run directly (coupling 0)
 
     void app.data.define(COLL, { indexes: ["slug", "repoRoot", "windowLabel", "createdAt"] });
 
@@ -47,15 +49,18 @@ const index_default = {
       createdAt: r.createdAt,
     });
 
-    // Resolve the repository root a workspace belongs to (delegated to git-core). A non-repo
-    // path or a git error surfaces as a failure envelope (no silent swallow).
+    // Resolve the repository root a workspace belongs to (git rev-parse). A non-repo path or a
+    // git error surfaces as a failure envelope (no silent swallow).
     async function resolveRepoRoot(repoPath) {
-      const out = await app.commands.execute(`${GITCORE}.root`, repoPath ? { path: repoPath } : {});
-      if (!out.ok) return { ok: false, out };
-      if (out.data?.state !== "repo") {
+      if (!repoPath) {
+        return { ok: false, out: err("NO_PATH", msg("no repository path — pass path or open a project", "저장소 경로 없음 — path 를 주거나 프로젝트를 여세요")) };
+      }
+      const st = await git.root(repoPath);
+      if (st.state === "repo") return { ok: true, root: st.root };
+      if (st.state === "not-repo") {
         return { ok: false, out: err("NOT_REPO", msg("not a git repository", "git 저장소가 아닙니다")) };
       }
-      return { ok: true, root: out.data.root };
+      return { ok: false, out: err("GIT_ERROR", st.error || msg("git error", "git 오류")) };
     }
 
     // Engine-neutral terminal program (the terminal is a replaceable seam — NAMING §4). Discover
@@ -71,7 +76,7 @@ const index_default = {
     // ── worktree.open — the one-shot ────────────────────────────────────────────
     reg("worktree.open", {
       description:
-        "Open a worktree workspace. Given a branch name or issue slug, create the branch and a git worktree (via git-core), then open a project on the worktree with a terminal as its first view (cwd = the worktree). Idempotent: opening a workspace that already exists activates it instead of creating a second one.",
+        "Open a worktree workspace. Given a branch name or issue slug, create the branch and a git worktree, then open a project on the worktree with a terminal as its first view (cwd = the worktree). Idempotent: opening a workspace that already exists activates it instead of creating a second one.",
       triggers: { ko: "워크트리 워크스페이스 열기 브랜치 새 작업 생성 워크트리" },
       params: {
         name: { type: "string", description: "Branch name or issue slug for the workspace", required: true },
@@ -122,14 +127,15 @@ const index_default = {
           return { reused: true, slug: record.slug, branch: record.branch, worktreeDir: record.worktreeDir, project: projectId, window: windowLabel };
         }
 
-        // create: branch + worktree (git-core owns the git), then a project + terminal on it
-        const add = await app.commands.execute(`${GITCORE}.worktree.add`, {
-          path: repoRoot,
+        // create: branch + worktree (git run directly), then a project + terminal on it
+        const dir = `${repoRoot}-wt/${plan.slug}`;
+        const add = await git.worktreeAdd({
+          repoRoot,
           branch: plan.branch,
-          ...(typeof p.base === "string" && p.base ? { base: p.base } : {}),
+          dir,
+          base: typeof p.base === "string" && p.base ? p.base : "HEAD",
         });
-        if (!add.ok) return err(add.code, add.message); // propagate git-core failure
-        const dir = add.data.dir;
+        if (!add.ok) return err(add.code, add.message); // propagate git failure (no silent swallow)
 
         const po = await app.commands.execute("project.open", { root: dir, program: termProgram });
         if (!po.ok) return err(po.code, po.message);
@@ -138,8 +144,8 @@ const index_default = {
 
         const rec = {
           slug: plan.slug,
-          branch: add.data.branch ?? plan.branch,
-          base: add.data.base ?? null,
+          branch: add.branch ?? plan.branch,
+          base: add.base ?? null,
           repoRoot,
           worktreeDir: dir,
           projectId,
@@ -159,7 +165,7 @@ const index_default = {
     // ── worktree.close — reclaim (surface + worktree; branch/commits survive) ────
     reg("worktree.close", {
       description:
-        "Close a worktree workspace: close its project surface and remove the worktree checkout via git-core. The branch and its commits are not touched. Idempotent — an absent workspace is a no-op. Refuses when the worktree has uncommitted changes (git's protection); commit or discard first.",
+        "Close a worktree workspace: close its project surface and remove the worktree checkout. The branch and its commits are not touched. Idempotent — an absent workspace is a no-op. Refuses when the worktree has uncommitted changes (git's protection); commit or discard first.",
       triggers: { ko: "워크트리 워크스페이스 닫기 회수 워크트리 제거" },
       params: {
         name: { type: "string", description: "The same branch name or slug used to open the workspace", required: true },
@@ -187,14 +193,11 @@ const index_default = {
         }
         if (projectId) await app.commands.execute("project.close", { project: projectId });
 
-        const rm = await app.commands.execute(`${GITCORE}.worktree.remove`, {
-          path: record.repoRoot,
-          dir: record.worktreeDir,
-        });
+        const rm = await git.worktreeRemove({ repoRoot: record.repoRoot, dir: record.worktreeDir });
         if (!rm.ok) {
           // Already gone (removed out-of-band) counts as reclaimed; otherwise surface the reason.
-          const wl = await app.commands.execute(`${GITCORE}.worktree.list`, { path: record.repoRoot });
-          const stillThere = wl.ok && (wl.data?.worktrees ?? []).some((w) => w.path === record.worktreeDir);
+          const wl = await git.worktreeList(record.repoRoot);
+          const stillThere = wl.ok && wl.worktrees.some((w) => w.path === record.worktreeDir);
           if (stillThere) return err(rm.code, rm.message); // dirty/locked — record kept
         }
         await app.data.delete(COLL, slug, { scope: SCOPE });

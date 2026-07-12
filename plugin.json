@@ -16,11 +16,9 @@
     "ui",
     "commands",
     "commands:destructive",
+    "process",
     "data"
   ],
-  "dependencies": {
-    "soksak-plugin-git-core": "^0.1.0"
-  },
   "contributes": {
     "commands": [
       {
