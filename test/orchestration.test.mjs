@@ -287,3 +287,38 @@ test("worktree.open — a record whose worktree is gone is not reused; the works
   assert.ok(add, "the provider was never asked to re-create the worktree");
   assert.equal((await m.app.data.query("workspace", { scope: "index" })).length, 1, "one record, not two");
 });
+
+// ── the surface is an axis too ───────────────────────────────────────────────────────────────
+// Dropping the record is half the reclaim. The project opened on that worktree is still on screen,
+// rooted at a directory that no longer exists — the app then banners "folder not found, close this
+// project". That is the same ghost one layer up, and it is what a RED demo left behind on a shared
+// app for someone else to find.
+
+test("worktree.list — dropping a stale record also closes the project it left open", async () => {
+  const { m, r, cmd } = boot({
+    git: { "worktree.list": () => ok({ worktrees: [{ path: "/repo", branch: "main" }] }) }, // the worktree is gone
+    core: { "state.tree": () => ok({ projects: [{ id: "t9", root: "/repo-wt/ghost" }] }) }, // its project is still open here
+  });
+  await seed(m, { slug: "ghost", branch: "ghost", repoRoot: "/repo", worktreeDir: "/repo-wt/ghost", projectId: "t9", windowLabel: "w-a", createdAt: 1 });
+
+  const out = await cmd("worktree.list")({});
+  assert.deepEqual(out.stale, ["ghost"]);
+  const closed = r.calls.find((c) => c.name === "project.close");
+  assert.ok(closed, "the project rooted at the vanished worktree was left open");
+  assert.equal(closed.params.project, "t9");
+});
+
+test("worktree.close — a surface it cannot reach is reported, never claimed as closed", async () => {
+  // A project lives in the window that opened it, and project.close only closes what is in the
+  // caller's window. Closing a workspace from another window reclaims the record and the worktree
+  // but cannot take the surface down — saying "closed" would be a lie the next run inherits.
+  const { m, cmd } = boot({
+    core: { "state.tree": () => ok({ projects: [] }) }, // this window does not host it
+  });
+  await seed(m, { slug: "elsewhere", branch: "elsewhere", repoRoot: "/repo", worktreeDir: "/repo-wt/elsewhere", projectId: "t7", windowLabel: "w-other", createdAt: 1 });
+
+  const out = await cmd("worktree.close")({ name: "elsewhere" });
+  assert.equal(out.closed, true, "the record and the worktree are still reclaimed");
+  assert.equal(out.surfaceClosed, false, "a surface in another window cannot be closed from here — say so");
+  assert.equal((await m.app.data.query("workspace", { scope: "index" })).length, 0);
+});

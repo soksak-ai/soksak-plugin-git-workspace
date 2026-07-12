@@ -232,22 +232,19 @@ var index_default = {
       params: {
         name: { type: "string", description: "The same branch name or slug used to open the workspace", required: true }
       },
-      returns: "{ closed, slug, branch?, worktreeDir? }",
+      returns: "{ closed, slug, branch?, worktreeDir?, surfaceClosed? }",
       examples: [`sok plugin.soksak-plugin-git-workspace.worktree.close '{"name":"feat/login"}'`],
-      message: (d) => d.closed ? msg(`Closed workspace ${d.branch ?? d.slug}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.branch ?? d.slug} \uB2EB\uAE30`) : msg(`No such workspace ${d.slug}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.slug} \uC5C6\uC74C`),
+      message: (d) => !d.closed ? msg(`No such workspace ${d.slug}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.slug} \uC5C6\uC74C`) : d.surfaceClosed === false ? msg(
+        `Closed workspace ${d.branch ?? d.slug} \u2014 its project is open in another window and must be closed there`,
+        `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.branch ?? d.slug} \uB2EB\uC74C \u2014 \uD504\uB85C\uC81D\uD2B8\uB294 \uB2E4\uB978 \uCC3D\uC5D0 \uC5F4\uB824 \uC788\uC5B4 \uADF8 \uCC3D\uC5D0\uC11C \uB2EB\uC544\uC57C \uD569\uB2C8\uB2E4`
+      ) : msg(`Closed workspace ${d.branch ?? d.slug}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.branch ?? d.slug} \uB2EB\uAE30`),
       handler: async (p) => {
         const raw = typeof p.name === "string" ? p.name : "";
         const slug = slugKey(normalizeBranch(raw) || raw);
         const records = await loadRecords();
         const record = records.find((r) => r.slug === slug);
         if (!record) return { closed: false, slug };
-        let projectId = record.projectId;
-        const tree = await app.commands.execute("state.tree");
-        if (tree.ok) {
-          const proj = (tree.data?.projects ?? []).find((pr) => pr.root === record.worktreeDir);
-          if (proj) projectId = proj.id;
-        }
-        if (projectId) await app.commands.execute("project.close", { project: projectId });
+        const surfaceClosed = await closeSurface(record.worktreeDir, record.projectId);
         const rm = await git.worktreeRemove({ repoRoot: record.repoRoot, dir: record.worktreeDir });
         if (!rm.ok) {
           const wl = await git.worktreeList(record.repoRoot);
@@ -260,9 +257,19 @@ var index_default = {
           slug,
           branch: record.branch
         });
-        return { closed: true, slug, branch: record.branch, worktreeDir: record.worktreeDir };
+        return { closed: true, slug, branch: record.branch, worktreeDir: record.worktreeDir, surfaceClosed };
       }
     });
+    async function closeSurface(worktreeDir, projectIdHint) {
+      let projectId = projectIdHint;
+      const tree = await app.commands.execute("state.tree");
+      const here = tree.ok ? (tree.data?.projects ?? []).find((pr) => pr.root === worktreeDir) : null;
+      if (here) projectId = here.id;
+      else if (!projectIdHint) return false;
+      if (!here) return false;
+      const out = await app.commands.execute("project.close", { project: projectId });
+      return out.ok === true;
+    }
     async function reconcile(records) {
       const byRepo = /* @__PURE__ */ new Map();
       for (const r of records) {
@@ -283,6 +290,7 @@ var index_default = {
           continue;
         }
         stale.push(r.slug);
+        await closeSurface(r.worktreeDir, r.projectId);
         await app.data.delete(COLL, r.slug, { scope: SCOPE });
       }
       return { kept, stale };

@@ -178,12 +178,17 @@ const index_default = {
       params: {
         name: { type: "string", description: "The same branch name or slug used to open the workspace", required: true },
       },
-      returns: "{ closed, slug, branch?, worktreeDir? }",
+      returns: "{ closed, slug, branch?, worktreeDir?, surfaceClosed? }",
       examples: ['sok plugin.soksak-plugin-git-workspace.worktree.close \'{"name":"feat/login"}\''],
       message: (d) =>
-        d.closed
-          ? msg(`Closed workspace ${d.branch ?? d.slug}`, `워크스페이스 ${d.branch ?? d.slug} 닫기`)
-          : msg(`No such workspace ${d.slug}`, `워크스페이스 ${d.slug} 없음`),
+        !d.closed
+          ? msg(`No such workspace ${d.slug}`, `워크스페이스 ${d.slug} 없음`)
+          : d.surfaceClosed === false
+            ? msg(
+                `Closed workspace ${d.branch ?? d.slug} — its project is open in another window and must be closed there`,
+                `워크스페이스 ${d.branch ?? d.slug} 닫음 — 프로젝트는 다른 창에 열려 있어 그 창에서 닫아야 합니다`,
+              )
+            : msg(`Closed workspace ${d.branch ?? d.slug}`, `워크스페이스 ${d.branch ?? d.slug} 닫기`),
       handler: async (p) => {
         const raw = typeof p.name === "string" ? p.name : "";
         const slug = slugKey(normalizeBranch(raw) || raw);
@@ -192,14 +197,10 @@ const index_default = {
         if (!record) return { closed: false, slug }; // idempotent no-op
 
         // Close the project surface first (terminates its terminal), then remove the worktree.
-        // Resolve the project by its root in this window — robust against id drift (reload/reseed).
-        let projectId = record.projectId;
-        const tree = await app.commands.execute("state.tree");
-        if (tree.ok) {
-          const proj = (tree.data?.projects ?? []).find((pr) => pr.root === record.worktreeDir);
-          if (proj) projectId = proj.id;
-        }
-        if (projectId) await app.commands.execute("project.close", { project: projectId });
+        // The surface lives in the window that opened it, and this command runs in one window: a
+        // workspace closed from elsewhere reclaims its record and its worktree but cannot take that
+        // window's project down. That is reported, not claimed.
+        const surfaceClosed = await closeSurface(record.worktreeDir, record.projectId);
 
         const rm = await git.worktreeRemove({ repoRoot: record.repoRoot, dir: record.worktreeDir });
         if (!rm.ok) {
@@ -214,7 +215,7 @@ const index_default = {
           slug,
           branch: record.branch,
         });
-        return { closed: true, slug, branch: record.branch, worktreeDir: record.worktreeDir };
+        return { closed: true, slug, branch: record.branch, worktreeDir: record.worktreeDir, surfaceClosed };
       },
     });
 
@@ -231,6 +232,22 @@ const index_default = {
     // A provider that cannot answer is not an answer. If the repository cannot be read, nothing is
     // known to be stale, and nothing is deleted — deleting on an unanswered question would destroy a
     // live workspace's record the first time git is unavailable.
+    // 표면 축의 단일 관문. 프로젝트는 그것을 연 창에 산다 — project.close 는 호출한 창의 세션만
+    // 닫는다(코어 closeProjectReleased 는 창-로컬 스토어를 본다). 그래서 다른 창의 표면에는 닿을 수
+    // 없고, 닿지 못한 것을 "닫았다"고 답하면 다음 실행이 그 거짓말을 물려받는다: 실체 없는 경로에
+    // 열린 프로젝트가 화면에 남아 "폴더를 찾을 수 없습니다" 배너를 띄운다. 닫았으면 true, 이 창에
+    // 없으면 false — 사실대로 답한다.
+    async function closeSurface(worktreeDir, projectIdHint) {
+      let projectId = projectIdHint;
+      const tree = await app.commands.execute("state.tree");
+      const here = tree.ok ? (tree.data?.projects ?? []).find((pr) => pr.root === worktreeDir) : null;
+      if (here) projectId = here.id;
+      else if (!projectIdHint) return false;
+      if (!here) return false; // 이 창에 없다 — 닿을 수 없다
+      const out = await app.commands.execute("project.close", { project: projectId });
+      return out.ok === true;
+    }
+
     async function reconcile(records) {
       const byRepo = new Map();
       for (const r of records) {
@@ -251,6 +268,9 @@ const index_default = {
           continue;
         }
         stale.push(r.slug);
+        // 레코드만 지우면 유령이 한 층 위로 옮겨갈 뿐이다 — 사라진 워크트리에 열린 프로젝트가
+        // 화면에 남는다. 표면도 같이 내린다(이 창에 있는 만큼).
+        await closeSurface(r.worktreeDir, r.projectId);
         await app.data.delete(COLL, r.slug, { scope: SCOPE });
       }
       return { kept, stale };
