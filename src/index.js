@@ -127,13 +127,17 @@ const index_default = {
           return { reused: true, slug: record.slug, branch: record.branch, worktreeDir: record.worktreeDir, project: projectId, window: windowLabel };
         }
 
-        // create: branch + worktree (git run directly), then a project + terminal on it
+        // create: branch + worktree (git run directly), then a project + terminal on it.
+        // A closed workspace keeps its branch — reopening the same name re-attaches a worktree to
+        // the existing branch instead of failing to re-create it (the open⇄close lifecycle pair).
         const dir = `${repoRoot}-wt/${plan.slug}`;
+        const attach = await git.branchExists(repoRoot, plan.branch);
         const add = await git.worktreeAdd({
           repoRoot,
           branch: plan.branch,
           dir,
           base: typeof p.base === "string" && p.base ? p.base : "HEAD",
+          attach,
         });
         if (!add.ok) return err(add.code, add.message); // propagate git failure (no silent swallow)
 
@@ -158,7 +162,7 @@ const index_default = {
           slug: rec.slug,
           branch: rec.branch,
         });
-        return { created: true, slug: rec.slug, branch: rec.branch, worktreeDir: dir, project: projectId, window: windowLabel };
+        return { created: true, attached: add.attached, slug: rec.slug, branch: rec.branch, worktreeDir: dir, project: projectId, window: windowLabel };
       },
     });
 

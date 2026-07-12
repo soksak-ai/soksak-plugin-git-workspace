@@ -131,15 +131,18 @@ function makeGit(processApi) {
         return { state: "error", error: String(e?.message ?? e) };
       }
     },
-    // Create a worktree on a new branch. Failure is the canonical envelope (MESSAGE-PROTOCOL).
-    async worktreeAdd({ repoRoot, branch, dir, base = "HEAD" }) {
-      const r = await run({
-        cwd: repoRoot,
-        args: ["worktree", "add", "--no-track", "-b", branch, "--", dir, base],
-        write: true
-      });
+    // Does a local branch already exist? (a closed workspace keeps its branch — reopening attaches.)
+    async branchExists(repoRoot, branch) {
+      const r = await run({ cwd: repoRoot, args: ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`] });
+      return r.code === 0;
+    },
+    // Add a worktree. New branch by default (-b … base); when attach=true, check out an existing
+    // branch instead (git worktree add <dir> <branch>). Failure is the canonical envelope.
+    async worktreeAdd({ repoRoot, branch, dir, base = "HEAD", attach = false }) {
+      const args = attach ? ["worktree", "add", "--", dir, branch] : ["worktree", "add", "--no-track", "-b", branch, "--", dir, base];
+      const r = await run({ cwd: repoRoot, args, write: true });
       if (r.code !== 0) return gitFail(r);
-      return { ok: true, dir, branch, base };
+      return { ok: true, dir, branch, base: attach ? null : base, attached: attach };
     },
     // Remove a worktree checkout (git refuses when it has uncommitted changes — the branch survives).
     async worktreeRemove({ repoRoot, dir }) {
@@ -246,11 +249,13 @@ var index_default = {
           return { reused: true, slug: record.slug, branch: record.branch, worktreeDir: record.worktreeDir, project: projectId2, window: windowLabel2 };
         }
         const dir = `${repoRoot}-wt/${plan.slug}`;
+        const attach = await git.branchExists(repoRoot, plan.branch);
         const add = await git.worktreeAdd({
           repoRoot,
           branch: plan.branch,
           dir,
-          base: typeof p.base === "string" && p.base ? p.base : "HEAD"
+          base: typeof p.base === "string" && p.base ? p.base : "HEAD",
+          attach
         });
         if (!add.ok) return err(add.code, add.message);
         const po = await app.commands.execute("project.open", { root: dir, program: termProgram });
@@ -273,7 +278,7 @@ var index_default = {
           slug: rec.slug,
           branch: rec.branch
         });
-        return { created: true, slug: rec.slug, branch: rec.branch, worktreeDir: dir, project: projectId, window: windowLabel };
+        return { created: true, attached: add.attached, slug: rec.slug, branch: rec.branch, worktreeDir: dir, project: projectId, window: windowLabel };
       }
     });
     reg("worktree.close", {

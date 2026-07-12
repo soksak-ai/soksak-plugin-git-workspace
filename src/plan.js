@@ -7,7 +7,7 @@
 // Turn a free-form input (a branch name or an issue slug) into a valid git branch
 // name, or null when nothing usable remains. Sanitizes rather than rejects so an
 // issue title ("Fix: the thing") becomes a branch ("Fix-the-thing"). The final
-// guard mirrors git-core's branch-name rule so what we return, git-core accepts.
+// guard matches git's own ref-name rule so what we return, git accepts.
 export function normalizeBranch(input) {
   if (typeof input !== "string") return null;
   let s = input.trim();

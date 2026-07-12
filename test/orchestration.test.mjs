@@ -33,9 +33,10 @@ function coreRouter(overrides = {}) {
   return { fn, calls };
 }
 
-// git process handler — repo root, worktree add/remove/list by argv.
+// git process handler — repo root, branch existence, worktree add/remove/list by argv.
 function defaultGit(_cmd, args) {
   if (args[0] === "rev-parse") return { stdout: "/repo\n", code: 0 };
+  if (args[0] === "show-ref") return { code: 1 }; // branch absent by default → new branch
   if (args[0] === "worktree" && args[1] === "add") return { code: 0 };
   if (args[0] === "worktree" && args[1] === "remove") return { code: 0 };
   if (args[0] === "worktree" && args[1] === "list") return { stdout: "", code: 0 };
@@ -63,8 +64,10 @@ test("worktree.open create — runs git worktree add, opens a project+terminal, 
   // git owns the worktree creation — spawned directly, not a plugin call
   const add = proc.calls.find((c) => c.args[0] === "worktree" && c.args[1] === "add");
   assert.ok(add, "git worktree add not spawned");
+  assert.ok(add.args.includes("-b"), "a fresh branch is created with -b");
   assert.ok(add.args.includes("feat/login") && add.args.includes("/repo-wt/feat-login"));
   assert.equal(add.opts.cwd, "/repo");
+  assert.equal(out.attached, false);
   // no plugin-to-plugin call (coupling 0)
   assert.ok(!r.calls.some((c) => c.name.startsWith("plugin.")), "must not call another plugin");
   // project opened on the worktree with a discovered terminal program
@@ -82,6 +85,25 @@ test("worktree.open reuse — a second open of the same slug activates, never ru
   const out = await cmd("worktree.open")({ name: "feat/login" });
   assert.equal(out.reused, true);
   assert.equal(proc.calls.filter((c) => c.args[0] === "worktree" && c.args[1] === "add").length, 0);
+  assert.equal((await m.app.data.query("workspace", { scope: "index" })).length, 1);
+});
+
+test("worktree.open attach — a surviving branch (no record) attaches a worktree, never re-creates it", async () => {
+  // The close⇄open pair: close kept the branch, removed the worktree and record. Opening the same
+  // name must attach a worktree to the existing branch (git worktree add <dir> <branch>, no -b).
+  const gitAttach = (_c, args) => {
+    if (args[0] === "rev-parse") return { stdout: "/repo\n", code: 0 };
+    if (args[0] === "show-ref") return { code: 0 }; // branch EXISTS
+    if (args[0] === "worktree" && args[1] === "add") return { code: 0 };
+    return { code: 0 };
+  };
+  const { m, proc, cmd } = boot({ git: gitAttach });
+  const out = await cmd("worktree.open")({ name: "feat/login" });
+  assert.equal(out.created, true);
+  assert.equal(out.attached, true);
+  const add = proc.calls.find((c) => c.args[0] === "worktree" && c.args[1] === "add");
+  assert.ok(!add.args.includes("-b"), "attach must not pass -b (that would try to re-create the branch → fail)");
+  assert.ok(add.args.includes("feat/login") && add.args.includes("/repo-wt/feat-login"));
   assert.equal((await m.app.data.query("workspace", { scope: "index" })).length, 1);
 });
 

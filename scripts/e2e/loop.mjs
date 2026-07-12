@@ -141,6 +141,18 @@ async function main() {
   const list2 = sok(`${PLUGIN}.worktree.list`, {}, { window: repoWin });
   assert.equal(list2.data.workspaces.length, 0, "record not reclaimed");
 
+  // ── GATE ④ close → reopen (attach to the surviving branch) ─────────────────────
+  step("④.reopen", "reopening the same name after close attaches to the surviving branch (no re-create)");
+  assert.ok(git(["branch", "--list", BRANCH]).stdout.trim(), "branch must survive close");
+  const o3 = sok(`${PLUGIN}.worktree.open`, { name: NAME, path: REPO }, { window: repoWin });
+  assert.ok(o3.ok, `reopen after close failed (lifecycle defect): ${o3.code} ${o3.message}`);
+  assert.equal(o3.data.attached, true, "reopen must attach to the existing branch, not create a new one");
+  assert.ok(git(["worktree", "list", "--porcelain"]).stdout.includes(WT), "worktree not re-attached");
+  const branchLines = git(["branch", "--list", BRANCH]).stdout.split("\n").filter((l) => l.trim()).length;
+  assert.equal(branchLines, 1, "must reuse the single surviving branch (no duplicate)");
+  sok(`${PLUGIN}.worktree.close`, { name: NAME }, { window: repoWin }); // clean up for the no-op check
+  await new Promise((r) => setTimeout(r, 600));
+
   step("②.idempotent", "closing again is a no-op");
   const c2 = sok(`${PLUGIN}.worktree.close`, { name: NAME }, { window: repoWin });
   assert.ok(c2.ok && c2.data.closed === false, "second close must be a no-op");
