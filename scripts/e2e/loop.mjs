@@ -40,6 +40,7 @@ function sok(cmd, params, opts = {}) {
 function git(args) {
   return spawnSync("git", ["-C", REPO, ...args], { encoding: "utf8" });
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const step = (n, s) => console.log(`\n[${n}] ${s}`);
 
 function ensureFixture() {
@@ -53,19 +54,33 @@ function ensureFixture() {
 }
 
 async function main() {
-  step("setup", "ensure the app is up and the fixture repo exists");
-  const wl = sok("window.list");
-  assert.ok(wl.ok, `app not reachable via ${SOK}: ${wl.message ?? "no response"}`);
+  step("setup", "app up (via the always-present control plane) + fixture repo");
+  // Target the control plane (main) for every global op — a bare command routes to a sticky
+  // "focused" window that may be gone/wrong on a cold boot. main always exists.
+  assert.ok(sok("window.list", undefined, { window: "main" }).ok, `app not reachable via ${SOK}`);
   ensureFixture();
 
-  step("window", "open the repo in its own window");
-  const wo = sok("window.open", { root: REPO });
-  assert.ok(wo.ok, `window.open: ${wo.message}`);
-  const repoWin = wo.data.label || wo.data.existingWindow;
-  assert.ok(repoWin, "no repo window label");
+  step("window", "open the repo window via the control plane; resolve it authoritatively");
+  sok("window.open", { root: REPO }, { window: "main" }); // control plane routes to / focuses the hosting window
+  // Resolve the hosting window from the authoritative project→window map, not window.open's return,
+  // and poll — on a cold boot the window may still be booting.
+  let repoWin = null;
+  for (let i = 0; i < 40 && !repoWin; i++) {
+    const projects = sok("window.projects", undefined, { window: "main" }).data?.projects || [];
+    repoWin = projects.find((p) => p.root === REPO)?.window || null;
+    if (!repoWin) await sleep(500);
+  }
+  assert.ok(repoWin && repoWin.startsWith("w-"), "no workspace window hosts the repo (cold-boot self-sufficiency)");
+  // Wait until the window's plugins are loaded (a freshly-created window is still booting).
+  for (let i = 0; i < 40; i++) {
+    const pl = sok("plugin.list", undefined, { window: repoWin });
+    if (pl.ok && (pl.data?.plugins || []).some((p) => p.id === "soksak-plugin-git-workspace" && p.status === "enabled")) break;
+    await sleep(500);
+  }
 
   step("view", "open the Workspaces view in the repo window (so ui.tree exposes it)");
-  sok("plugin.view.open", { view: "soksak-plugin-git-workspace.view", placement: "sidebar-right" }, { window: repoWin });
+  const vo = sok("plugin.view.open", { view: "soksak-plugin-git-workspace.view", placement: "sidebar-right" }, { window: repoWin });
+  assert.ok(vo.ok, `plugin.view.open failed: ${vo.code} ${vo.message}`);
 
   step("pre-clean", "reclaim any leftover from a prior run (idempotent)");
   sok(`${PLUGIN}.worktree.close`, { name: NAME }, { window: repoWin });
@@ -116,6 +131,11 @@ async function main() {
   step("③.ui.tree", "the plugin's nodes are exposed and one is clickable");
   const tree = sok("ui.tree", undefined, { window: repoWin });
   const addrs = (tree.data.nodes || tree.data || []).map((n) => n.address || n);
+  // Guard the targeting: ui.tree must have returned this window's nodes (not the control plane's).
+  assert.ok(
+    addrs.some((a) => typeof a === "string" && a.startsWith(`win/${repoWin}/`)),
+    `ui.tree did not target the repo window ${repoWin} (got: ${[...new Set(addrs.map((a) => String(a).split("/")[1]))].join(",")})`,
+  );
   const refresh = addrs.find((a) => typeof a === "string" && a.endsWith("/node/refresh"));
   const rowNode = addrs.find((a) => typeof a === "string" && a.includes(`/node/row/${SLUG}`));
   assert.ok(refresh, `no refresh node exposed. addresses:\n${addrs.filter((a) => String(a).includes("git-workspace")).join("\n")}`);
