@@ -110,7 +110,10 @@ test("worktree.open create — asks the provider for a worktree, opens a project
 });
 
 test("worktree.open reuse — a second open of the same slug activates, never asks for a second worktree", async () => {
-  const { m, r, cmd } = boot();
+  // The provider corroborates the record: the worktree is really there, so the record is a workspace.
+  const { m, r, cmd } = boot({
+    git: { "worktree.list": () => ok({ worktrees: [{ path: "/repo" }, { path: "/repo-wt/feat-login" }] }) },
+  });
   await seed(m, { slug: "feat-login", branch: "feat/login", repoRoot: "/repo", worktreeDir: "/repo-wt/feat-login", projectId: "t2", windowLabel: "w-a", createdAt: 1 });
   const out = await cmd("worktree.open")({ name: "feat/login" });
   assert.equal(out.reused, true);
@@ -202,12 +205,85 @@ test("worktree.close — refuses (keeps record) when the worktree is still there
   assert.equal((await m.app.data.query("workspace", { scope: "index" })).length, 1);
 });
 
-test("worktree.list — returns the persisted records", async () => {
-  const { m, cmd } = boot();
+test("worktree.list — returns the persisted records that git corroborates", async () => {
+  // The provider is the truth about what exists: a record it lists is a workspace, and the list
+  // command reports what is, not what was once written down.
+  const { m, cmd } = boot({
+    git: {
+      "worktree.list": () =>
+        ok({ worktrees: [{ path: "/repo" }, { path: "/repo-wt/a" }, { path: "/repo-wt/b" }] }),
+    },
+  });
   for (const s of ["a", "b"]) {
     await seed(m, { slug: s, branch: s, repoRoot: "/repo", worktreeDir: `/repo-wt/${s}`, projectId: `t-${s}`, windowLabel: `w-${s}`, createdAt: s === "a" ? 1 : 2 });
   }
   const out = await cmd("worktree.list")({});
   assert.equal(out.workspaces.length, 2);
   assert.deepEqual(out.workspaces.map((w) => w.slug), ["a", "b"]);
+  assert.deepEqual(out.stale, []);
+});
+
+// ── the record is a claim about a worktree, and a false claim must be corrected ──────────────
+// A window can die and the workspace lives on: the worktree is still on disk, and the record still
+// describes a real thing. But when the WORKTREE is gone — pruned, removed, or wiped with a fixture —
+// the record is a claim about something that does not exist. Nothing corrected it, so it survived
+// forever: invisible to any name-scoped cleanup, and poisoning the next run's count. That is how one
+// harness's leftover turned another lane's gate red.
+
+test("worktree.list — a record whose worktree is gone is dropped, and the drop is reported", async () => {
+  const { m, r, cmd } = boot({
+    git: {
+      // git knows about the main checkout only: the recorded worktree is not there anymore.
+      "worktree.list": () => ok({ worktrees: [{ path: "/repo", branch: "main" }] }),
+    },
+  });
+  await seed(m, { slug: "alive", branch: "alive", repoRoot: "/repo", worktreeDir: "/repo-wt/alive", projectId: "t1", windowLabel: "w-a", createdAt: 1 });
+  await seed(m, { slug: "ghost", branch: "ghost", repoRoot: "/repo", worktreeDir: "/repo-wt/ghost", projectId: "t2", windowLabel: "w-b", createdAt: 2 });
+
+  // The provider reports only /repo-wt/alive as a live worktree.
+  r.gitCalls.length = 0;
+  const live = { "worktree.list": () => ok({ worktrees: [{ path: "/repo" }, { path: "/repo-wt/alive" }] }) };
+  const { m: m2, cmd: cmd2 } = boot({ git: live });
+  await seed(m2, { slug: "alive", branch: "alive", repoRoot: "/repo", worktreeDir: "/repo-wt/alive", projectId: "t1", windowLabel: "w-a", createdAt: 1 });
+  await seed(m2, { slug: "ghost", branch: "ghost", repoRoot: "/repo", worktreeDir: "/repo-wt/ghost", projectId: "t2", windowLabel: "w-b", createdAt: 2 });
+
+  const out = await cmd2("worktree.list")({});
+  assert.deepEqual(out.workspaces.map((w) => w.slug), ["alive"], "a workspace with no worktree is not a workspace");
+  // The drop is reported, never silent: a leak that disappears without a word is a leak nobody fixes.
+  assert.deepEqual(out.stale, ["ghost"]);
+  // And it is really gone from the store — the next run does not inherit it.
+  const rows = await m2.app.data.query("workspace", { scope: "index" });
+  assert.deepEqual(rows.map((x) => x.slug), ["alive"]);
+});
+
+test("worktree.list — the provider failing is not a licence to delete records", async () => {
+  // If git cannot be asked, nothing is known to be stale. Deleting on an unanswered question would
+  // destroy a live workspace's record the first time the provider is disabled.
+  const { m, cmd } = boot({ git: { "worktree.list": () => fail("GIT_ERROR", "cannot read repository") } });
+  await seed(m, { slug: "alive", branch: "alive", repoRoot: "/repo", worktreeDir: "/repo-wt/alive", projectId: "t1", windowLabel: "w-a", createdAt: 1 });
+  const out = await cmd("worktree.list")({});
+  assert.deepEqual(out.workspaces.map((w) => w.slug), ["alive"]);
+  assert.deepEqual(out.stale, []);
+  assert.equal((await m.app.data.query("workspace", { scope: "index" })).length, 1);
+});
+
+test("worktree.open — a record whose worktree is gone is not reused; the workspace is created again", async () => {
+  // The failure this prevents: a fixture is wiped, the record survives, and the next open "reuses" a
+  // worktree that is not there — opening a project on a directory that no longer exists. A stale
+  // record is not a workspace, so the open creates one.
+  const { m, r, cmd } = boot({
+    git: {
+      "worktree.list": () => ok({ worktrees: [{ path: "/repo", branch: "main" }] }), // no worktrees left
+      "branch.exists": () => ok({ exists: true }), // the branch survived, so the create attaches
+    },
+  });
+  await seed(m, { slug: "feat-login", branch: "feat/login", repoRoot: "/repo", worktreeDir: "/repo-wt/feat-login", projectId: "t2", windowLabel: "w-dead", createdAt: 1 });
+
+  const out = await cmd("worktree.open")({ name: "feat/login" });
+  assert.equal(out.reused, undefined, "a record with no worktree must not be reused");
+  assert.equal(out.created, true);
+  assert.equal(out.attached, true, "the branch survived — the worktree attaches to it");
+  const add = r.gitCalls.find((c) => c.cmd === "worktree.add");
+  assert.ok(add, "the provider was never asked to re-create the worktree");
+  assert.equal((await m.app.data.query("workspace", { scope: "index" })).length, 1, "one record, not two");
 });

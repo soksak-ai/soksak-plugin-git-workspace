@@ -89,6 +89,23 @@ async function main() {
   if (existsSync(WT)) rmSync(WT, { recursive: true, force: true });
   git(["branch", "-D", BRANCH]);
 
+  // The precondition, stated out loud. This gate used to assert a GLOBAL workspace count, so a
+  // record left behind by an entirely different harness made it fail with "2 !== 1" — a number that
+  // points at this plugin and says nothing about the leftover that actually caused it. An
+  // environment this run does not own is not a failure of the thing under test: it dies here,
+  // naming what is in the way, so the next reader fixes the leftover instead of hunting a phantom.
+  step("precondition", "no foreign workspace records — this run owns the environment or it does not run");
+  const before = sok(`${PLUGIN}.worktree.list`, {}, { window: repoWin });
+  assert.ok(before.ok, `worktree.list: ${before.code} ${before.message}`);
+  const foreign = before.data.workspaces.filter((w) => w.slug !== SLUG);
+  assert.equal(
+    foreign.length,
+    0,
+    `precondition violated: ${foreign.length} workspace(s) this run does not own are still open — ` +
+      `${foreign.map((w) => `${w.slug} (${w.worktreeDir})`).join(", ")}. ` +
+      `Reclaim them first: sok ${PLUGIN}.worktree.close '{"name":"<slug>"}'`,
+  );
+
   // ── GATE ① create ──────────────────────────────────────────────────────────
   step("①.create", "worktree.open — one command → branch + worktree + project + terminal");
   const o1 = sok(`${PLUGIN}.worktree.open`, { name: NAME, path: REPO }, { window: repoWin });
@@ -123,7 +140,8 @@ async function main() {
   assert.ok(o2.ok, `second open failed: ${o2.message}`);
   assert.equal(o2.data.reused, true, "second open must reuse");
   const list1 = sok(`${PLUGIN}.worktree.list`, {}, { window: repoWin });
-  assert.equal(list1.data.workspaces.length, 1, "must be exactly one workspace after a 2x open");
+  const mine1 = list1.data.workspaces.filter((w) => w.slug === SLUG);
+  assert.equal(mine1.length, 1, "must be exactly one record for this workspace after a 2x open");
   const wtCount = git(["worktree", "list"]).stdout.split("\n").filter((l) => l.includes("e2e-feature")).length;
   assert.equal(wtCount, 1, "must be exactly one worktree after a 2x open");
 
@@ -159,7 +177,7 @@ async function main() {
   const tree2 = sok("state.tree", undefined, { window: repoWin });
   assert.ok(!tree2.data.projects.some((p) => p.root === WT), "project surface not reclaimed");
   const list2 = sok(`${PLUGIN}.worktree.list`, {}, { window: repoWin });
-  assert.equal(list2.data.workspaces.length, 0, "record not reclaimed");
+  assert.equal(list2.data.workspaces.filter((w) => w.slug === SLUG).length, 0, "record not reclaimed");
 
   // ── GATE ④ close → reopen (attach to the surviving branch) ─────────────────────
   step("④.reopen", "reopening the same name after close attaches to the surviving branch (no re-create)");

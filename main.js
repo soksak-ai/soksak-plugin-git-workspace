@@ -172,7 +172,7 @@ var index_default = {
         const rr = await resolveRepoRoot(repoPath);
         if (!rr.ok) return rr.out;
         const repoRoot = rr.root;
-        const records = await loadRecords();
+        const { kept: records } = await reconcile(await loadRecords());
         const plan = planOpen(records, p.name);
         if (plan.action === "invalid") {
           return err("INVALID_NAME", msg("name yields no usable branch", "name \uC5D0\uC11C \uC720\uD6A8\uD55C \uBE0C\uB79C\uCE58\uBA85\uC744 \uB9CC\uB4E4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4"));
@@ -263,14 +263,44 @@ var index_default = {
         return { closed: true, slug, branch: record.branch, worktreeDir: record.worktreeDir };
       }
     });
+    async function reconcile(records) {
+      const byRepo = /* @__PURE__ */ new Map();
+      for (const r of records) {
+        if (!byRepo.has(r.repoRoot)) byRepo.set(r.repoRoot, []);
+        byRepo.get(r.repoRoot).push(r);
+      }
+      const live = /* @__PURE__ */ new Map();
+      for (const repoRoot of byRepo.keys()) {
+        const out = await git.worktreeList(repoRoot);
+        live.set(repoRoot, out.ok ? new Set((out.worktrees ?? []).map((w) => w.path)) : null);
+      }
+      const kept = [];
+      const stale = [];
+      for (const r of records) {
+        const known = live.get(r.repoRoot);
+        if (known === null || known === void 0 || known.has(r.worktreeDir)) {
+          kept.push(r);
+          continue;
+        }
+        stale.push(r.slug);
+        await app.data.delete(COLL, r.slug, { scope: SCOPE });
+      }
+      return { kept, stale };
+    }
     reg("worktree.list", {
-      description: "List active worktree workspaces \u2014 the same records the Workspaces view shows: slug, branch, worktree directory, hosting window and project, and origin repository.",
+      description: "List active worktree workspaces \u2014 the same records the Workspaces view shows: slug, branch, worktree directory, hosting window and project, and origin repository. Records whose worktree no longer exists are reconciled away and reported in stale: a workspace without a worktree is not a workspace, and leaving the record behind poisons whoever counts them next.",
       triggers: { ko: "\uC6CC\uD06C\uD2B8\uB9AC \uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 \uBAA9\uB85D \uC870\uD68C \uC0C1\uD0DC" },
       params: {},
-      returns: "{ workspaces: [{slug, branch, worktreeDir, windowLabel, projectId, repoRoot, createdAt}] }",
+      returns: "{ workspaces: [{slug, branch, worktreeDir, windowLabel, projectId, repoRoot, createdAt}], stale: [slug] }",
       examples: ["sok plugin.soksak-plugin-git-workspace.worktree.list"],
-      message: (d) => msg(`${(d.workspaces ?? []).length} workspace(s)`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${(d.workspaces ?? []).length}\uAC1C`),
-      handler: async () => ({ workspaces: (await loadRecords()).map(publicRecord) })
+      message: (d) => (d.stale ?? []).length > 0 ? msg(
+        `${(d.workspaces ?? []).length} workspace(s); dropped ${d.stale.length} whose worktree is gone`,
+        `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${(d.workspaces ?? []).length}\uAC1C, \uC6CC\uD06C\uD2B8\uB9AC\uAC00 \uC0AC\uB77C\uC9C4 \uB808\uCF54\uB4DC ${d.stale.length}\uAC1C \uC815\uB9AC`
+      ) : msg(`${(d.workspaces ?? []).length} workspace(s)`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${(d.workspaces ?? []).length}\uAC1C`),
+      handler: async () => {
+        const { kept, stale } = await reconcile(await loadRecords());
+        return { workspaces: kept.map(publicRecord), stale };
+      }
     });
     const cleanups = /* @__PURE__ */ new Map();
     ctx.subscriptions.push(

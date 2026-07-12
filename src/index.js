@@ -1,10 +1,10 @@
 // soksak-plugin-git-workspace — worktree workspaces (branch + worktree + surface + terminal).
-// Owns its git execution: worktree add/remove/list and repository-root discovery run the git CLI
-// directly through the process capability (no dependency on another plugin — coupling 0). The
-// workspace surface is a project opened on the worktree with a terminal as its first view
-// (cwd = the worktree), driven through core registry commands. Workspace records persist in the
-// core data store ("data" permission). External data (paths/branches) is inserted with
-// textContent only — no innerHTML for content.
+// It runs no git: worktree add/remove/list and repository-root discovery come from soksak-git-spec@1,
+// and the plugin that implements it is found by contract, never by name (src/git.js). The workspace
+// surface is a project opened on the worktree with a terminal as its first view (cwd = the worktree),
+// driven through core registry commands. Workspace records persist in the core data store ("data"
+// permission) — and a record is a claim about a worktree, so git is asked whether the claim is still
+// true (reconcile). External data (paths/branches) is inserted with textContent only.
 import { normalizeBranch, slugKey, planOpen, deriveViewStatus } from "./plan.js";
 import { makeGit } from "./git.js";
 
@@ -104,7 +104,9 @@ const index_default = {
         if (!rr.ok) return rr.out;
         const repoRoot = rr.root;
 
-        const records = await loadRecords();
+        // Reconcile before deciding: a record whose worktree is gone is not a workspace to reuse —
+        // reusing it would open a project on a directory that no longer exists. The truth is git's.
+        const { kept: records } = await reconcile(await loadRecords());
         const plan = planOpen(records, p.name);
         if (plan.action === "invalid") {
           return err("INVALID_NAME", msg("name yields no usable branch", "name 에서 유효한 브랜치명을 만들 수 없습니다"));
@@ -216,16 +218,64 @@ const index_default = {
       },
     });
 
+    // A record is a claim about a worktree. A window can die and the claim stays true — the worktree
+    // is still on disk, and reopening puts it in a new window. But when the worktree itself is gone
+    // (pruned, removed, or wiped along with a fixture), the claim is false, and nothing here used to
+    // correct it: the record survived forever, invisible to any name-scoped cleanup, and poisoned the
+    // next run's count. That is how one harness's leftover turned another lane's gate red.
+    //
+    // So the truth is git's, and it is asked. A record whose worktree the provider does not list is
+    // dropped — and the drop is REPORTED, never silent: a leak that disappears without a word is a
+    // leak nobody fixes.
+    //
+    // A provider that cannot answer is not an answer. If the repository cannot be read, nothing is
+    // known to be stale, and nothing is deleted — deleting on an unanswered question would destroy a
+    // live workspace's record the first time git is unavailable.
+    async function reconcile(records) {
+      const byRepo = new Map();
+      for (const r of records) {
+        if (!byRepo.has(r.repoRoot)) byRepo.set(r.repoRoot, []);
+        byRepo.get(r.repoRoot).push(r);
+      }
+      const live = new Map(); // repoRoot → Set(worktree paths) | null when git could not answer
+      for (const repoRoot of byRepo.keys()) {
+        const out = await git.worktreeList(repoRoot);
+        live.set(repoRoot, out.ok ? new Set((out.worktrees ?? []).map((w) => w.path)) : null);
+      }
+      const kept = [];
+      const stale = [];
+      for (const r of records) {
+        const known = live.get(r.repoRoot);
+        if (known === null || known === undefined || known.has(r.worktreeDir)) {
+          kept.push(r);
+          continue;
+        }
+        stale.push(r.slug);
+        await app.data.delete(COLL, r.slug, { scope: SCOPE });
+      }
+      return { kept, stale };
+    }
+
     // ── worktree.list — the status/pull surface (same records the view shows) ────
     reg("worktree.list", {
       description:
-        "List active worktree workspaces — the same records the Workspaces view shows: slug, branch, worktree directory, hosting window and project, and origin repository.",
+        "List active worktree workspaces — the same records the Workspaces view shows: slug, branch, worktree directory, hosting window and project, and origin repository. Records whose worktree no longer exists are reconciled away and reported in stale: a workspace without a worktree is not a workspace, and leaving the record behind poisons whoever counts them next.",
       triggers: { ko: "워크트리 워크스페이스 목록 조회 상태" },
       params: {},
-      returns: "{ workspaces: [{slug, branch, worktreeDir, windowLabel, projectId, repoRoot, createdAt}] }",
+      returns:
+        "{ workspaces: [{slug, branch, worktreeDir, windowLabel, projectId, repoRoot, createdAt}], stale: [slug] }",
       examples: ["sok plugin.soksak-plugin-git-workspace.worktree.list"],
-      message: (d) => msg(`${(d.workspaces ?? []).length} workspace(s)`, `워크스페이스 ${(d.workspaces ?? []).length}개`),
-      handler: async () => ({ workspaces: (await loadRecords()).map(publicRecord) }),
+      message: (d) =>
+        (d.stale ?? []).length > 0
+          ? msg(
+              `${(d.workspaces ?? []).length} workspace(s); dropped ${d.stale.length} whose worktree is gone`,
+              `워크스페이스 ${(d.workspaces ?? []).length}개, 워크트리가 사라진 레코드 ${d.stale.length}개 정리`,
+            )
+          : msg(`${(d.workspaces ?? []).length} workspace(s)`, `워크스페이스 ${(d.workspaces ?? []).length}개`),
+      handler: async () => {
+        const { kept, stale } = await reconcile(await loadRecords());
+        return { workspaces: kept.map(publicRecord), stale };
+      },
     });
 
     // ── The view (DOM trio) ─────────────────────────────────────────────────────
