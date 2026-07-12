@@ -15,6 +15,7 @@
   "permissions": [
     "ui",
     "commands",
+    "commands:destructive",
     "data"
   ],
   "dependencies": {

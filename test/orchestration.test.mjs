@@ -9,29 +9,33 @@ import { mockApp } from "./helpers/mock-app.mjs";
 const manifest = JSON.parse(readFileSync(new URL("../plugin.json", import.meta.url), "utf8"));
 const plugin = (await import("../main.js")).default;
 
+const ok = (data) => ({ ok: true, code: "OK", message: "", data });
+const fail = (code, message) => ({ ok: false, code, message });
+
 // A scripted core/git-core router. Records every call; returns canned envelopes.
 function router(overrides = {}) {
   const calls = [];
   const defaults = {
+    "program.list": () => ok({ programs: [{ id: "terminal-xterm" }, { id: "terminal-ghostty" }] }),
     "plugin.soksak-plugin-git-core.root": () => ok({ state: "repo", root: "/repo" }),
     "plugin.soksak-plugin-git-core.worktree.add": (p) =>
       ok({ dir: `/repo-wt/${p.branch.replaceAll("/", "-")}`, branch: p.branch, base: p.base ?? "HEAD" }),
     "plugin.soksak-plugin-git-core.worktree.remove": () => ok({ removed: true }),
     "plugin.soksak-plugin-git-core.worktree.list": () => ok({ worktrees: [] }),
-    "window.open": () => ok({ label: "w-new" }),
-    "window.close": () => ok({}),
+    "project.open": () => ok({ projectId: "t2", spaceId: "c2", panelId: "g2", viewId: "v2" }),
+    "state.tree": () => ok({ projects: [{ id: "t2", root: "/repo-wt/feat-login" }] }),
+    "project.close": () => ok({}),
+    "project.activate": () => ok({}),
     "window.focus": () => ok({}),
   };
   const table = { ...defaults, ...overrides };
   const fn = async (name, params) => {
     calls.push({ name, params });
-    const h = table[name];
-    return h ? h(params) : ok({});
+    const handler = table[name];
+    return handler ? handler(params) : ok({});
   };
   return { fn, calls };
 }
-const ok = (data) => ({ ok: true, code: "OK", message: "", data });
-const fail = (code, message) => ({ ok: false, code, message });
 
 function boot(overrides) {
   const r = router(overrides);
@@ -41,33 +45,35 @@ function boot(overrides) {
   return { m, r, cmd };
 }
 
-test("worktree.open create — delegates worktree to git-core, opens a window, persists a record", async () => {
+test("worktree.open create — delegates worktree to git-core, opens a project+terminal, persists a record", async () => {
   const { m, r, cmd } = boot();
   const out = await cmd("worktree.open")({ name: "feat/login" });
   assert.equal(out.created, true);
   assert.equal(out.slug, "feat-login");
   assert.equal(out.branch, "feat/login");
   assert.equal(out.worktreeDir, "/repo-wt/feat-login");
-  assert.equal(out.window, "w-new");
+  assert.equal(out.project, "t2");
   // git-core owns the worktree creation
   assert.ok(r.calls.some((c) => c.name === "plugin.soksak-plugin-git-core.worktree.add" && c.params.branch === "feat/login"));
-  assert.ok(r.calls.some((c) => c.name === "window.open" && c.params.root === "/repo-wt/feat-login"));
+  // the project is opened on the worktree with a discovered terminal program (cwd = worktree)
+  const po = r.calls.find((c) => c.name === "project.open");
+  assert.equal(po.params.root, "/repo-wt/feat-login");
+  assert.equal(po.params.program, "terminal-xterm");
   // the record is persisted
   const rows = await m.app.data.query("workspace", { scope: "index" });
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].windowLabel, "w-new");
+  assert.equal(rows[0].projectId, "t2");
 });
 
-test("worktree.open reuse — a second open of the same slug focuses, never mints a second worktree", async () => {
-  const { m, r, cmd } = boot({ "window.open": () => ok({ existingWindow: "w-new" }) });
+test("worktree.open reuse — a second open of the same slug activates, never mints a second worktree", async () => {
+  const { m, r, cmd } = boot();
   await m.app.data.put(
     "workspace",
-    { slug: "feat-login", branch: "feat/login", repoRoot: "/repo", worktreeDir: "/repo-wt/feat-login", windowLabel: "w-new", createdAt: 1 },
+    { slug: "feat-login", branch: "feat/login", repoRoot: "/repo", worktreeDir: "/repo-wt/feat-login", projectId: "t2", windowLabel: "w-a", createdAt: 1 },
     { scope: "index", id: "feat-login" },
   );
   const out = await cmd("worktree.open")({ name: "feat/login" });
   assert.equal(out.reused, true);
-  assert.equal(out.window, "w-new");
   assert.equal(r.calls.filter((c) => c.name === "plugin.soksak-plugin-git-core.worktree.add").length, 0);
   const rows = await m.app.data.query("workspace", { scope: "index" });
   assert.equal(rows.length, 1); // still one
@@ -89,16 +95,16 @@ test("worktree.open — an unusable name is INVALID_NAME, never a create", async
   assert.equal(out.code, "INVALID_NAME");
 });
 
-test("worktree.close — closes the window, removes the worktree, deletes the record", async () => {
+test("worktree.close — closes the project, removes the worktree, deletes the record", async () => {
   const { m, r, cmd } = boot();
   await m.app.data.put(
     "workspace",
-    { slug: "feat-login", branch: "feat/login", repoRoot: "/repo", worktreeDir: "/repo-wt/feat-login", windowLabel: "w-new", createdAt: 1 },
+    { slug: "feat-login", branch: "feat/login", repoRoot: "/repo", worktreeDir: "/repo-wt/feat-login", projectId: "t2", windowLabel: "w-a", createdAt: 1 },
     { scope: "index", id: "feat-login" },
   );
   const out = await cmd("worktree.close")({ name: "feat/login" });
   assert.equal(out.closed, true);
-  assert.ok(r.calls.some((c) => c.name === "window.close" && c.params.label === "w-new"));
+  assert.ok(r.calls.some((c) => c.name === "project.close" && c.params.project === "t2"));
   assert.ok(r.calls.some((c) => c.name === "plugin.soksak-plugin-git-core.worktree.remove" && c.params.dir === "/repo-wt/feat-login"));
   assert.equal((await m.app.data.query("workspace", { scope: "index" })).length, 0);
 });
@@ -117,7 +123,7 @@ test("worktree.close — refuses (keeps record) when git-core reports the worktr
   });
   await m.app.data.put(
     "workspace",
-    { slug: "feat-login", branch: "feat/login", repoRoot: "/repo", worktreeDir: "/repo-wt/feat-login", windowLabel: "w-new", createdAt: 1 },
+    { slug: "feat-login", branch: "feat/login", repoRoot: "/repo", worktreeDir: "/repo-wt/feat-login", projectId: "t2", windowLabel: "w-a", createdAt: 1 },
     { scope: "index", id: "feat-login" },
   );
   const out = await cmd("worktree.close")({ name: "feat/login" });
@@ -131,7 +137,7 @@ test("worktree.list — returns the persisted records", async () => {
   for (const s of ["a", "b"]) {
     await m.app.data.put(
       "workspace",
-      { slug: s, branch: s, repoRoot: "/repo", worktreeDir: `/repo-wt/${s}`, windowLabel: `w-${s}`, createdAt: s === "a" ? 1 : 2 },
+      { slug: s, branch: s, repoRoot: "/repo", worktreeDir: `/repo-wt/${s}`, projectId: `t-${s}`, windowLabel: `w-${s}`, createdAt: s === "a" ? 1 : 2 },
       { scope: "index", id: s },
     );
   }

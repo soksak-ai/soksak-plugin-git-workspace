@@ -65,7 +65,7 @@ var index_default = {
     const err = (code, message) => ({ ok: false, code, message });
     const msg = (en, ko) => (typeof app.locale === "function" ? app.locale() : "en") === "ko" ? ko : en;
     const reg = (name, spec) => ctx.subscriptions.push(app.commands.register(name, spec));
-    void app.data.define(COLL, { indexes: ["slug", "repoRoot", "windowLabel"] });
+    void app.data.define(COLL, { indexes: ["slug", "repoRoot", "windowLabel", "createdAt"] });
     const loadRecords = async () => {
       const rows = await app.data.query(COLL, { scope: SCOPE, order: "createdAt" });
       return Array.isArray(rows) ? rows : [];
@@ -75,6 +75,7 @@ var index_default = {
       branch: r.branch,
       worktreeDir: r.worktreeDir,
       windowLabel: r.windowLabel,
+      projectId: r.projectId,
       repoRoot: r.repoRoot,
       createdAt: r.createdAt
     });
@@ -86,25 +87,28 @@ var index_default = {
       }
       return { ok: true, root: out.data.root };
     }
+    async function resolveTerminalProgram() {
+      const out = await app.commands.execute("program.list");
+      const ids = out.ok ? (out.data?.programs ?? []).map((p) => p.id).filter((id) => typeof id === "string" && id.startsWith("terminal-")) : [];
+      return ids.includes("terminal-xterm") ? "terminal-xterm" : ids[0] || "terminal-xterm";
+    }
     reg("worktree.open", {
-      description: "Open a worktree workspace. Given a branch name or issue slug, create the branch and a git worktree (via git-core), then open a project window rooted at the worktree with its default terminal. Idempotent: opening a workspace that already exists focuses its window instead of creating a second one.",
+      description: "Open a worktree workspace. Given a branch name or issue slug, create the branch and a git worktree (via git-core), then open a project on the worktree with a terminal as its first view (cwd = the worktree). Idempotent: opening a workspace that already exists activates it instead of creating a second one.",
       triggers: { ko: "\uC6CC\uD06C\uD2B8\uB9AC \uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 \uC5F4\uAE30 \uBE0C\uB79C\uCE58 \uC0C8 \uC791\uC5C5 \uC0DD\uC131 \uC6CC\uD06C\uD2B8\uB9AC" },
       params: {
         name: { type: "string", description: "Branch name or issue slug for the workspace", required: true },
         path: { type: "string", description: "Repository directory the worktree branches from (defaults to the active project root)" },
         base: { type: "string", description: "Base ref for the new branch (default HEAD)" }
       },
-      returns: "{ slug, branch, worktreeDir, window, created|reused }",
+      returns: "{ slug, branch, worktreeDir, project, window, created|reused }",
       examples: [
         `sok plugin.soksak-plugin-git-workspace.worktree.open '{"name":"feat/login"}'`,
         `sok plugin.soksak-plugin-git-workspace.worktree.open '{"name":"issue-42","base":"main"}'`
       ],
-      message: (d) => d.reused ? msg(`Focused workspace ${d.branch}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.branch} \uD3EC\uCEE4\uC2A4`) : msg(`Opened workspace ${d.branch}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.branch} \uC5F4\uAE30`),
+      message: (d) => d.reused ? msg(`Activated workspace ${d.branch}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.branch} \uD65C\uC131\uD654`) : msg(`Opened workspace ${d.branch}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.branch} \uC5F4\uAE30`),
       hint: (d) => d.ok === false ? [] : [{ cmd: "plugin.soksak-plugin-git-workspace.worktree.list", why: msg("see all open workspaces", "\uC5F4\uB9B0 \uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 \uC804\uCCB4\uB97C \uBD05\uB2C8\uB2E4") }],
       handler: async (p) => {
-        const repoPathParam = typeof p.path === "string" && p.path ? p.path : void 0;
-        const projectRoot = app.project?.current?.()?.root ?? void 0;
-        const repoPath = repoPathParam ?? projectRoot;
+        const repoPath = (typeof p.path === "string" && p.path ? p.path : void 0) ?? app.project?.current?.()?.root ?? void 0;
         const rr = await resolveRepoRoot(repoPath);
         if (!rr.ok) return rr.out;
         const repoRoot = rr.root;
@@ -113,19 +117,21 @@ var index_default = {
         if (plan.action === "invalid") {
           return err("INVALID_NAME", msg("name yields no usable branch", "name \uC5D0\uC11C \uC720\uD6A8\uD55C \uBE0C\uB79C\uCE58\uBA85\uC744 \uB9CC\uB4E4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4"));
         }
+        const termProgram = await resolveTerminalProgram();
         if (plan.action === "reuse") {
           const record = plan.record;
-          const wo2 = await app.commands.execute("window.open", { root: record.worktreeDir });
-          const windowLabel2 = wo2.ok ? wo2.data?.existingWindow || wo2.data?.label || record.windowLabel : record.windowLabel;
-          if (windowLabel2 && windowLabel2 !== record.windowLabel) {
-            await app.data.put(COLL, { ...record, windowLabel: windowLabel2 }, { scope: SCOPE, id: record.slug });
+          const po2 = await app.commands.execute("project.open", { root: record.worktreeDir, program: termProgram });
+          const projectId2 = po2.ok ? po2.data?.projectId ?? record.projectId : record.projectId;
+          const windowLabel2 = po2.ok && po2.data?.existingWindow ? po2.data.existingWindow : app.windowLabel?.() ?? record.windowLabel;
+          if (projectId2 !== record.projectId || windowLabel2 !== record.windowLabel) {
+            await app.data.put(COLL, { ...record, projectId: projectId2, windowLabel: windowLabel2 }, { scope: SCOPE, id: record.slug });
           }
           app.activity.publish("workspace.open", {
-            message: msg(`Focused workspace ${record.branch}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${record.branch} \uD3EC\uCEE4\uC2A4`),
+            message: msg(`Activated workspace ${record.branch}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${record.branch} \uD65C\uC131\uD654`),
             slug: record.slug,
             branch: record.branch
           });
-          return { reused: true, slug: record.slug, branch: record.branch, worktreeDir: record.worktreeDir, window: windowLabel2 };
+          return { reused: true, slug: record.slug, branch: record.branch, worktreeDir: record.worktreeDir, project: projectId2, window: windowLabel2 };
         }
         const add = await app.commands.execute(`${GITCORE}.worktree.add`, {
           path: repoRoot,
@@ -134,15 +140,17 @@ var index_default = {
         });
         if (!add.ok) return err(add.code, add.message);
         const dir = add.data.dir;
-        const wo = await app.commands.execute("window.open", { root: dir });
-        if (!wo.ok) return err(wo.code, wo.message);
-        const windowLabel = wo.data?.label || wo.data?.existingWindow || null;
+        const po = await app.commands.execute("project.open", { root: dir, program: termProgram });
+        if (!po.ok) return err(po.code, po.message);
+        const projectId = po.data?.projectId ?? null;
+        const windowLabel = po.data?.routedWindow || po.data?.existingWindow || app.windowLabel?.() || null;
         const rec = {
           slug: plan.slug,
           branch: add.data.branch ?? plan.branch,
           base: add.data.base ?? null,
           repoRoot,
           worktreeDir: dir,
+          projectId,
           windowLabel,
           createdAt: Date.now()
         };
@@ -152,19 +160,17 @@ var index_default = {
           slug: rec.slug,
           branch: rec.branch
         });
-        return { created: true, slug: rec.slug, branch: rec.branch, worktreeDir: dir, window: windowLabel };
+        return { created: true, slug: rec.slug, branch: rec.branch, worktreeDir: dir, project: projectId, window: windowLabel };
       }
     });
     reg("worktree.close", {
-      description: "Close a worktree workspace: close its window and remove the worktree checkout via git-core. The branch and its commits are not touched. Idempotent \u2014 an absent workspace is a no-op. Refuses when the worktree has uncommitted changes (git's protection); commit or discard first.",
+      description: "Close a worktree workspace: close its project surface and remove the worktree checkout via git-core. The branch and its commits are not touched. Idempotent \u2014 an absent workspace is a no-op. Refuses when the worktree has uncommitted changes (git's protection); commit or discard first.",
       triggers: { ko: "\uC6CC\uD06C\uD2B8\uB9AC \uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 \uB2EB\uAE30 \uD68C\uC218 \uC6CC\uD06C\uD2B8\uB9AC \uC81C\uAC70" },
       params: {
         name: { type: "string", description: "The same branch name or slug used to open the workspace", required: true }
       },
       returns: "{ closed, slug, branch?, worktreeDir? }",
-      examples: [
-        `sok plugin.soksak-plugin-git-workspace.worktree.close '{"name":"feat/login"}'`
-      ],
+      examples: [`sok plugin.soksak-plugin-git-workspace.worktree.close '{"name":"feat/login"}'`],
       message: (d) => d.closed ? msg(`Closed workspace ${d.branch ?? d.slug}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.branch ?? d.slug} \uB2EB\uAE30`) : msg(`No such workspace ${d.slug}`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${d.slug} \uC5C6\uC74C`),
       handler: async (p) => {
         const raw = typeof p.name === "string" ? p.name : "";
@@ -172,7 +178,13 @@ var index_default = {
         const records = await loadRecords();
         const record = records.find((r) => r.slug === slug);
         if (!record) return { closed: false, slug };
-        await app.commands.execute("window.close", { label: record.windowLabel });
+        let projectId = record.projectId;
+        const tree = await app.commands.execute("state.tree");
+        if (tree.ok) {
+          const proj = (tree.data?.projects ?? []).find((pr) => pr.root === record.worktreeDir);
+          if (proj) projectId = proj.id;
+        }
+        if (projectId) await app.commands.execute("project.close", { project: projectId });
         const rm = await app.commands.execute(`${GITCORE}.worktree.remove`, {
           path: record.repoRoot,
           dir: record.worktreeDir
@@ -192,10 +204,10 @@ var index_default = {
       }
     });
     reg("worktree.list", {
-      description: "List active worktree workspaces \u2014 the same records the Workspaces view shows: slug, branch, worktree directory, hosting window, and origin repository.",
+      description: "List active worktree workspaces \u2014 the same records the Workspaces view shows: slug, branch, worktree directory, hosting window and project, and origin repository.",
       triggers: { ko: "\uC6CC\uD06C\uD2B8\uB9AC \uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 \uBAA9\uB85D \uC870\uD68C \uC0C1\uD0DC" },
       params: {},
-      returns: "{ workspaces: [{slug, branch, worktreeDir, windowLabel, repoRoot, createdAt}] }",
+      returns: "{ workspaces: [{slug, branch, worktreeDir, windowLabel, projectId, repoRoot, createdAt}] }",
       examples: ["sok plugin.soksak-plugin-git-workspace.worktree.list"],
       message: (d) => msg(`${(d.workspaces ?? []).length} workspace(s)`, `\uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 ${(d.workspaces ?? []).length}\uAC1C`),
       handler: async () => ({ workspaces: (await loadRecords()).map(publicRecord) })
@@ -235,7 +247,7 @@ var index_default = {
             errEl.style.display = "block";
             report({ kind: "error", message: String(text) });
           };
-          async function render() {
+          async function renderList() {
             errEl.style.display = "none";
             listEl.replaceChildren();
             report({ kind: "loading" });
@@ -254,10 +266,7 @@ var index_default = {
             report({ kind: "active", count: records.length });
             const frag = document.createDocumentFragment();
             for (const r of records) {
-              const row = h(
-                "div",
-                "display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer"
-              );
+              const row = h("div", "display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer");
               row.title = `${r.branch}  \xB7  ${r.worktreeDir}`;
               row.dataset.node = `row/${r.slug}`;
               const branchEl = h("span", "flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)", r.branch);
@@ -275,15 +284,16 @@ var index_default = {
               };
               row.onclick = () => {
                 if (r.windowLabel) void app.commands.execute("window.focus", { label: r.windowLabel });
+                if (r.projectId) void app.commands.execute("project.activate", { project: r.projectId });
               };
               row.append(branchEl, repoEl, closeBtn);
               frag.append(row);
             }
             listEl.append(frag);
           }
-          refreshBtn.onclick = () => void render();
-          void render();
-          const sub = app.data.watch(COLL, { scope: SCOPE }, () => void render());
+          refreshBtn.onclick = () => void renderList();
+          void renderList();
+          const sub = app.data.watch(COLL, { scope: SCOPE }, () => void renderList());
           cleanups.set(container, () => sub.dispose());
         },
         unmount(container) {

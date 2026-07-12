@@ -7,6 +7,7 @@ export function mockApp(opts = {}) {
   const activity = [];
   const executed = [];
   const store = new Map(); // `${coll}\0${scope}\0${id}` → doc
+  const indexes = new Map(); // coll → Set(indexed fields) — mirrors the core's order/where guard
 
   const key = (coll, scope, id) => `${coll}\0${scope ?? "default"}\0${id}`;
 
@@ -30,7 +31,9 @@ export function mockApp(opts = {}) {
     events: { on: () => ({ dispose() {} }), progress: () => {} },
     activity: { publish: (kind, entry) => activity.push({ kind, entry }) },
     data: {
-      async define() {},
+      async define(coll, o) {
+        indexes.set(coll, new Set([...(o?.indexes ?? []), "created", "updated"]));
+      },
       async put(coll, doc, o) {
         const id = o?.id ?? doc.id ?? String(store.size + 1);
         store.set(key(coll, o?.scope, id), { ...doc, id });
@@ -43,10 +46,14 @@ export function mockApp(opts = {}) {
         return store.delete(key(coll, o?.scope, id));
       },
       async query(coll, o) {
+        const order = o?.order;
+        if (order && !(indexes.get(coll)?.has(order))) {
+          throw new Error(`정렬 필드가 인덱스로 선언되지 않음: ${order}`); // mirror the core guard
+        }
         const prefix = `${coll}\0${o?.scope ?? "default"}\0`;
         const rows = [];
         for (const [k, v] of store) if (k.startsWith(prefix)) rows.push(v);
-        rows.sort((a, b) => (a[o?.order ?? "createdAt"] ?? 0) - (b[o?.order ?? "createdAt"] ?? 0));
+        rows.sort((a, b) => (a[order ?? "created"] ?? 0) - (b[order ?? "created"] ?? 0));
         return rows;
       },
       watch: () => ({ dispose() {} }),
