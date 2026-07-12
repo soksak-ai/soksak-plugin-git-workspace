@@ -8,7 +8,7 @@ survive.
 ## Commands
 
 - `worktree.open` — Open a worktree workspace. Given a branch name or issue slug, create the
-  branch and worktree (via `soksak-plugin-git-core`), then open a project window whose default
+  branch and worktree (through whatever implements `soksak-git-spec@1`), then open a project window whose default
   terminal is rooted at the worktree. Idempotent: opening an existing workspace focuses its
   window instead of minting a second one.
 - `worktree.close` — Close a worktree workspace: close its window and remove the worktree
@@ -23,7 +23,16 @@ active / error) on the view status axis.
 
 ## Contract
 
-`worktree.open`/`close`/`list` own no git execution of their own — the git operations (worktree
-add/list/remove, repository root discovery) are delegated to `soksak-plugin-git-core`, declared as
-a dependency. Window, terminal, and panel orchestration go through core registry commands. The
-plugin persists its workspace records in the core data store (`data` permission).
+`worktree.open`/`close`/`list` run no git. The git operations they need — repository root
+discovery, branch existence, worktree add/list/remove — come from **`soksak-git-spec@1`**, and the
+plugin that implements it is found **by contract, never by name**: the manifest declares
+`consumes: ["soksak-git-spec@1"]`, the implementer is resolved through `plugin.implementers`, and no
+plugin id appears in this plugin's code or manifest. Swap the implementer and nothing here changes.
+No enabled implementer is a loud refusal (`NO_GIT_PROVIDER`), never an empty workspace list.
+
+Because it runs no git, it holds **no `process` permission** — it cannot spawn anything at all.
+That is the point: a plugin that ran git had to carry its own ref whitelist and path proof, and a
+duplicated defense is a security debt. Those rules now live in the contract, and are scored there.
+
+Window, terminal, and panel orchestration go through core registry commands. The plugin persists
+its workspace records in the core data store (`data` permission).

@@ -31,7 +31,8 @@ const index_default = {
     // message resolves to the host language (docs/I18N.md — human surface {en,ko}).
     const msg = (en, ko) => ((typeof app.locale === "function" ? app.locale() : "en") === "ko" ? ko : en);
     const reg = (name, spec) => ctx.subscriptions.push(app.commands.register(name, spec));
-    const git = makeGit(app.process); // git CLI, run directly (coupling 0)
+    // git comes from the contract, and the implementer is discovered, never named (C3 L2 contract-pin).
+    const git = makeGit(app, msg);
 
     void app.data.define(COLL, { indexes: ["slug", "repoRoot", "windowLabel", "createdAt"] });
 
@@ -60,7 +61,8 @@ const index_default = {
       if (st.state === "not-repo") {
         return { ok: false, out: err("NOT_REPO", msg("not a git repository", "git 저장소가 아닙니다")) };
       }
-      return { ok: false, out: err("GIT_ERROR", st.error || msg("git error", "git 오류")) };
+      // NO_GIT_PROVIDER survives as itself — nothing implements the contract, which is not a git error.
+      return { ok: false, out: err(st.code || "GIT_ERROR", st.error || msg("git error", "git 오류")) };
     }
 
     // Engine-neutral terminal program (the terminal is a replaceable seam — NAMING §4). Discover

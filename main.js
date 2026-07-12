@@ -47,113 +47,58 @@ function deriveViewStatus(outcome, msg) {
 }
 
 // src/git.js
-var READ_ENV = Object.freeze({ LC_ALL: "C", LANG: "C", GIT_OPTIONAL_LOCKS: "0" });
-var WRITE_ENV = Object.freeze({ LC_ALL: "C", LANG: "C" });
-var READ_TIMEOUT_MS = 3e4;
-var WRITE_TIMEOUT_MS = 18e4;
-var NOT_REPO_RE = /not a git repository/i;
-function parseWorktreeList(stdout) {
-  const list = [];
-  let cur = null;
-  for (const rec of String(stdout).split("\0")) {
-    if (rec === "") {
-      if (cur) list.push(cur);
-      cur = null;
-      continue;
-    }
-    const sp = rec.indexOf(" ");
-    const key = sp < 0 ? rec : rec.slice(0, sp);
-    const val = sp < 0 ? void 0 : rec.slice(sp + 1);
-    if (key === "worktree") {
-      if (cur) list.push(cur);
-      cur = { path: val ?? "" };
-    } else if (cur) {
-      if (key === "HEAD") cur.head = val ?? "";
-      else if (key === "branch") cur.branch = (val ?? "").replace(/^refs\/heads\//, "");
-      else if (key === "detached") cur.detached = true;
-      else if (key === "bare") cur.bare = true;
-      else if (key === "locked") cur.locked = val ?? "";
-      else if (key === "prunable") cur.prunable = val ?? "";
-    }
+var GIT_CONTRACT = "soksak-git-spec@1";
+function noProvider(msg) {
+  return {
+    ok: false,
+    code: "NO_GIT_PROVIDER",
+    message: msg(
+      `no enabled plugin implements ${GIT_CONTRACT}`,
+      `${GIT_CONTRACT} \uC744 \uAD6C\uD604\uD55C \uD65C\uC131 \uD50C\uB7EC\uADF8\uC778\uC774 \uC5C6\uC2B5\uB2C8\uB2E4`
+    )
+  };
+}
+function makeGit(app, msg) {
+  async function provider() {
+    const out = await app.commands.execute("plugin.implementers", { contract: GIT_CONTRACT });
+    if (!out?.ok) return null;
+    const found = (out.data?.implementers ?? []).find((i) => i.status === "enabled");
+    return found?.id ?? null;
   }
-  if (cur) list.push(cur);
-  return list;
-}
-function gitFail(r) {
-  return { ok: false, code: "GIT_ERROR", message: r.stderr || `git exit ${r.code}` };
-}
-function makeGit(processApi) {
-  function run({ cwd, args, write = false, timeoutMs }) {
-    return new Promise((resolve, reject) => {
-      const limit = timeoutMs ?? (write ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS);
-      const dec = new TextDecoder();
-      let out = "";
-      let err = "";
-      let done = false;
-      let timer = null;
-      processApi.spawn("git", args, { cwd, env: write ? { ...WRITE_ENV } : { ...READ_ENV } }).then((handle) => {
-        const subs = [];
-        const finish = (fn, v) => {
-          if (done) return;
-          done = true;
-          if (timer) clearTimeout(timer);
-          for (const s of subs) s.dispose();
-          fn(v);
-        };
-        timer = setTimeout(() => {
-          void processApi.kill(handle);
-          finish(reject, new Error(`git ${args[0] ?? ""} timeout ${limit}ms`));
-        }, limit);
-        subs.push(
-          processApi.onData(handle, (b) => out += dec.decode(b, { stream: true })),
-          processApi.onStderr(handle, (b) => err += new TextDecoder().decode(b)),
-          processApi.onExit(handle, (code) => finish(resolve, { code, stdout: out, stderr: err.trim() }))
-        );
-      }).catch((e) => {
-        if (!done) {
-          done = true;
-          if (timer) clearTimeout(timer);
-          reject(e instanceof Error ? e : new Error(String(e)));
-        }
-      });
-    });
+  async function call(cmd, params) {
+    const id = await provider();
+    if (!id) return noProvider(msg);
+    return app.commands.execute(`plugin.${id}.${cmd}`, params);
   }
   return {
-    run,
-    // Tri-state repository root discovery: repo (with root), not-repo, or error.
+    call,
+    // Tri-state root discovery. The three states are three, not two: a repository git cannot read is
+    // an error, and answering "not-repo" invites the caller to initialize over a broken repository.
+    // The refusal's code travels with it: "git failed" and "there is no git" are different facts,
+    // and a caller that collapses them tells the user to check a repository that was never read.
     async root(cwd) {
-      try {
-        const r = await run({ cwd, args: ["rev-parse", "--show-toplevel"] });
-        if (r.code === 0) return { state: "repo", root: r.stdout.trim() };
-        if (NOT_REPO_RE.test(r.stderr)) return { state: "not-repo" };
-        return { state: "error", error: r.stderr };
-      } catch (e) {
-        return { state: "error", error: String(e?.message ?? e) };
-      }
+      const out = await call("root", { path: cwd });
+      if (!out.ok) return { state: "error", error: out.message, code: out.code };
+      return out.data ?? { state: "error", error: "empty answer", code: "GIT_ERROR" };
     },
-    // Does a local branch already exist? (a closed workspace keeps its branch — reopening attaches.)
+    // A closed workspace keeps its branch — reopening attaches to it instead of recreating it, which
+    // would mean deleting the branch, which is the work.
     async branchExists(repoRoot, branch) {
-      const r = await run({ cwd: repoRoot, args: ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`] });
-      return r.code === 0;
+      const out = await call("branch.exists", { path: repoRoot, branch });
+      return out.ok ? out.data?.exists === true : false;
     },
-    // Add a worktree. New branch by default (-b … base); when attach=true, check out an existing
-    // branch instead (git worktree add <dir> <branch>). Failure is the canonical envelope.
+    // The contract answers { dir, branch, base, attached }; a failure is its own envelope.
     async worktreeAdd({ repoRoot, branch, dir, base = "HEAD", attach = false }) {
-      const args = attach ? ["worktree", "add", "--", dir, branch] : ["worktree", "add", "--no-track", "-b", branch, "--", dir, base];
-      const r = await run({ cwd: repoRoot, args, write: true });
-      if (r.code !== 0) return gitFail(r);
-      return { ok: true, dir, branch, base: attach ? null : base, attached: attach };
+      const out = await call("worktree.add", { path: repoRoot, branch, dir, base, attach });
+      return out.ok ? { ok: true, ...out.data ?? {} } : out;
     },
-    // Remove a worktree checkout (git refuses when it has uncommitted changes — the branch survives).
     async worktreeRemove({ repoRoot, dir }) {
-      const r = await run({ cwd: repoRoot, args: ["worktree", "remove", "--", dir], write: true });
-      if (r.code !== 0) return gitFail(r);
-      return { ok: true, removed: dir };
+      const out = await call("worktree.remove", { path: repoRoot, dir });
+      return out.ok ? { ok: true, ...out.data ?? {} } : out;
     },
     async worktreeList(repoRoot) {
-      const r = await run({ cwd: repoRoot, args: ["worktree", "list", "--porcelain", "-z"] });
-      if (r.code !== 0) return gitFail(r);
-      return { ok: true, worktrees: parseWorktreeList(r.stdout) };
+      const out = await call("worktree.list", { path: repoRoot });
+      return out.ok ? { ok: true, ...out.data ?? {} } : out;
     }
   };
 }
@@ -176,7 +121,7 @@ var index_default = {
     const err = (code, message) => ({ ok: false, code, message });
     const msg = (en, ko) => (typeof app.locale === "function" ? app.locale() : "en") === "ko" ? ko : en;
     const reg = (name, spec) => ctx.subscriptions.push(app.commands.register(name, spec));
-    const git = makeGit(app.process);
+    const git = makeGit(app, msg);
     void app.data.define(COLL, { indexes: ["slug", "repoRoot", "windowLabel", "createdAt"] });
     const loadRecords = async () => {
       const rows = await app.data.query(COLL, { scope: SCOPE, order: "createdAt" });
@@ -200,7 +145,7 @@ var index_default = {
       if (st.state === "not-repo") {
         return { ok: false, out: err("NOT_REPO", msg("not a git repository", "git \uC800\uC7A5\uC18C\uAC00 \uC544\uB2D9\uB2C8\uB2E4")) };
       }
-      return { ok: false, out: err("GIT_ERROR", st.error || msg("git error", "git \uC624\uB958")) };
+      return { ok: false, out: err(st.code || "GIT_ERROR", st.error || msg("git error", "git \uC624\uB958")) };
     }
     async function resolveTerminalProgram() {
       const out = await app.commands.execute("program.list");

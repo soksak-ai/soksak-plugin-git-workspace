@@ -16,7 +16,6 @@
     "ui",
     "commands",
     "commands:destructive",
-    "process",
     "data"
   ],
   "contributes": {
@@ -87,5 +86,8 @@
         }
       }
     ]
-  }
+  },
+  "consumes": [
+    "soksak-git-spec@1"
+  ]
 }
