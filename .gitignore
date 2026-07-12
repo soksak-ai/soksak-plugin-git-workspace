@@ -1,0 +1,3 @@
+node_modules
+# machine-local dev/install marker — deployment metadata lives elsewhere
+.soksak.json

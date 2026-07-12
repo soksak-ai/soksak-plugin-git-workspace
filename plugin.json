@@ -1,0 +1,92 @@
+{
+  "spec": "soksak-spec-plugin@0.0.1",
+  "id": "soksak-plugin-git-workspace",
+  "name": {
+    "en": "Git Workspace",
+    "ko": "깃 워크스페이스"
+  },
+  "version": "0.0.1",
+  "repo": "https://github.com/soksak-ai/soksak-plugin-git-workspace.git",
+  "description": {
+    "en": "One-shot worktree workspaces: a branch and worktree, its own window with a terminal at the worktree, and reclaim when done. Branches and commits survive close.",
+    "ko": "원샷 워크트리 워크스페이스 — 브랜치와 워크트리, 워크트리를 cwd 로 하는 전용 창과 터미널, 완료 시 회수. 닫아도 브랜치와 커밋은 존속."
+  },
+  "entry": "main.js",
+  "permissions": [
+    "ui",
+    "commands",
+    "data"
+  ],
+  "dependencies": {
+    "soksak-plugin-git-core": "^0.1.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "name": "worktree.open",
+        "title": {
+          "en": "Open a worktree workspace",
+          "ko": "워크트리 워크스페이스 열기"
+        }
+      },
+      {
+        "name": "worktree.close",
+        "title": {
+          "en": "Close a worktree workspace",
+          "ko": "워크트리 워크스페이스 닫기"
+        }
+      },
+      {
+        "name": "worktree.list",
+        "title": {
+          "en": "List worktree workspaces",
+          "ko": "워크트리 워크스페이스 목록"
+        }
+      }
+    ],
+    "views": [
+      {
+        "id": "view",
+        "title": {
+          "en": "Workspaces",
+          "ko": "워크스페이스"
+        },
+        "icon": "⎇",
+        "placements": [
+          "sidebar-right",
+          "content"
+        ],
+        "defaultPlacement": "sidebar-right",
+        "status": [
+          "loading",
+          "empty",
+          "active",
+          "error"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "id": "refresh",
+        "description": {
+          "en": "Refresh button (reloads the workspace list)",
+          "ko": "새로고침 버튼(워크스페이스 목록 재로드)"
+        }
+      },
+      {
+        "id": "row",
+        "description": {
+          "en": "Workspace row (click = focus its window). data-node=\"row/<slug>\"",
+          "ko": "워크스페이스 행(클릭=창 포커스). data-node=\"row/<슬러그>\""
+        }
+      },
+      {
+        "id": "close",
+        "description": {
+          "en": "Per-row close button (reclaims the worktree and window). data-node=\"close/<slug>\"",
+          "ko": "행별 닫기 버튼(워크트리·창 회수). data-node=\"close/<슬러그>\""
+        }
+      }
+    ]
+  }
+}
