@@ -3,13 +3,13 @@
 // A git runner is a spawn wrapper, an env pin, timeouts, a branch-name whitelist and a porcelain
 // parser. Every plugin that ran git kept its own copy, and a duplicated defense is a security debt:
 // the copy written slightly wrong is the one that ships, and it does not announce itself. Those
-// rules are stated and scored once, in soksak-git-spec@1. This plugin asks whoever implements it.
+// rules are stated and scored once, in soksak-spec-plugin-git. This plugin asks whoever implements it.
 //
 // The implementer is resolved by contract, never named (C3 L2 contract-pin). The manifest declares
-// `consumes: ["soksak-git-spec@1"]` and the host's call gate reads that declaration, so no plugin id
+// `consumes: ["soksak-spec-plugin-git"]` and the host's call gate reads that declaration, so no plugin id
 // appears here or in the manifest. Swap the implementer and this file does not change.
 
-export const GIT_CONTRACT = "soksak-git-spec@1";
+export const GIT_CONTRACT = "soksak-spec-plugin-git";
 
 // No enabled implementer is a loud refusal. A workspace without git is not an empty workspace list —
 // it is a plugin that cannot do its job, and saying so is the only honest answer.

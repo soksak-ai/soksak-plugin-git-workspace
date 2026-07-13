@@ -1,7 +1,7 @@
 // Handler orchestration — the create/reuse/close/list flow.
 //
 // git is not run here and is not mocked at the process level: this plugin consumes
-// soksak-git-spec@1 and calls whoever implements it. So the harness plays the implementer, and the
+// soksak-spec-plugin-git and calls whoever implements it. So the harness plays the implementer, and the
 // id it plays is deliberately not the one that ships — an implementer named anywhere in this plugin
 // would fail these tests.
 //
@@ -15,7 +15,7 @@ import { mockApp } from "./helpers/mock-app.mjs";
 const manifest = JSON.parse(readFileSync(new URL("../plugin.json", import.meta.url), "utf8"));
 const plugin = (await import("../main.js")).default;
 
-const CONTRACT = "soksak-git-spec@1";
+const CONTRACT = "soksak-spec-plugin-git";
 const PROVIDER = "soksak-plugin-any-git";
 const ok = (data) => ({ ok: true, code: "OK", message: "", data });
 const fail = (code, message) => ({ ok: false, code, message });

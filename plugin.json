@@ -88,6 +88,9 @@
     ]
   },
   "consumes": [
-    "soksak-git-spec@1"
+    {
+      "id": "soksak-spec-plugin-git",
+      "range": "0.0.1"
+    }
   ]
 }

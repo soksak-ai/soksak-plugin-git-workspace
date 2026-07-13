@@ -1,5 +1,5 @@
 // soksak-plugin-git-workspace — worktree workspaces (branch + worktree + surface + terminal).
-// It runs no git: worktree add/remove/list and repository-root discovery come from soksak-git-spec@1,
+// It runs no git: worktree add/remove/list and repository-root discovery come from soksak-spec-plugin-git,
 // and the plugin that implements it is found by contract, never by name (src/git.js). The workspace
 // surface is a project opened on the worktree with a terminal as its first view (cwd = the worktree),
 // driven through core registry commands. Workspace records persist in the core data store ("data"

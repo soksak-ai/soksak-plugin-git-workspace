@@ -1,4 +1,4 @@
-// The git seam — this plugin runs no git. It asks whoever implements soksak-git-spec@1, and it
+// The git seam — this plugin runs no git. It asks whoever implements soksak-spec-plugin-git, and it
 // finds that plugin by contract, never by name.
 //
 // The provider id the tests hand it is deliberately NOT the one that ships: if an implementer's name

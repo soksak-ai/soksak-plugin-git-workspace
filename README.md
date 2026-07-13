@@ -8,7 +8,7 @@ survive.
 ## Commands
 
 - `worktree.open` — Open a worktree workspace. Given a branch name or issue slug, create the
-  branch and worktree (through whatever implements `soksak-git-spec@1`), then open a project window whose default
+  branch and worktree (through whatever implements `soksak-spec-plugin-git`), then open a project window whose default
   terminal is rooted at the worktree. Idempotent: opening an existing workspace focuses its
   window instead of minting a second one.
 - `worktree.close` — Close a worktree workspace: close its window and remove the worktree
@@ -24,9 +24,9 @@ active / error) on the view status axis.
 ## Contract
 
 `worktree.open`/`close`/`list` run no git. The git operations they need — repository root
-discovery, branch existence, worktree add/list/remove — come from **`soksak-git-spec@1`**, and the
+discovery, branch existence, worktree add/list/remove — come from **`soksak-spec-plugin-git`**, and the
 plugin that implements it is found **by contract, never by name**: the manifest declares
-`consumes: ["soksak-git-spec@1"]`, the implementer is resolved through `plugin.implementers`, and no
+`consumes: ["soksak-spec-plugin-git"]`, the implementer is resolved through `plugin.implementers`, and no
 plugin id appears in this plugin's code or manifest. Swap the implementer and nothing here changes.
 No enabled implementer is a loud refusal (`NO_GIT_PROVIDER`), never an empty workspace list.
 

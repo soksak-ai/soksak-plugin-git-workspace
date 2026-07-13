@@ -47,7 +47,7 @@ function deriveViewStatus(outcome, msg) {
 }
 
 // src/git.js
-var GIT_CONTRACT = "soksak-git-spec@1";
+var GIT_CONTRACT = "soksak-spec-plugin-git";
 function noProvider(msg) {
   return {
     ok: false,
