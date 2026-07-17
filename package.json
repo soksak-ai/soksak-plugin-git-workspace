@@ -2,7 +2,7 @@
   "name": "soksak-plugin-git-workspace",
   "private": true,
   "type": "module",
-  "description": "soksak worktree-workspace plugin — open a branch+worktree in its own window with a terminal, list them, reclaim them",
+  "description": "soksak worktree-workspace plugin \u2014 open a branch+worktree in its own window with a terminal, list them, reclaim them",
   "scripts": {
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
@@ -11,5 +11,12 @@
   },
   "devDependencies": {
     "esbuild": "^0.24.2"
+  },
+  "version": "0.0.1",
+  "soksakRelease": {
+    "kind": "plugin",
+    "id": "soksak-plugin-git-workspace",
+    "repository": "https://github.com/soksak-ai/soksak-plugin-git-workspace",
+    "manifest": "release.json"
   }
 }
