@@ -36,7 +36,7 @@ test("the provider is resolved by contract id, and never named", async () => {
   const discovery = [];
   const git = makeGit(hostApp({ calls, discovery }), msg);
   await git.worktreeList("/repo");
-  assert.deepEqual(discovery, [{ contract: GIT_CONTRACT }]);
+  assert.deepEqual(discovery, [{ id: GIT_CONTRACT }]);
   assert.equal(calls[0][0], `plugin.${PROVIDER}.worktree.list`);
   for (const [name] of calls) assert.ok(!name.includes("git-core"), `an implementer is named: ${name}`);
 });

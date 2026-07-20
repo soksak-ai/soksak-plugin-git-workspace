@@ -60,7 +60,7 @@ function noProvider(msg) {
 }
 function makeGit(app, msg) {
   async function provider() {
-    const out = await app.commands.execute("plugin.implementers", { contract: GIT_CONTRACT });
+    const out = await app.commands.execute("plugin.implementers", { id: GIT_CONTRACT });
     if (!out?.ok) return null;
     const found = (out.data?.implementers ?? []).find((i) => i.status === "enabled");
     return found?.id ?? null;

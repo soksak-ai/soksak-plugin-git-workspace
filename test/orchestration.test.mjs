@@ -51,7 +51,7 @@ function router({ core = {}, git = {}, implementers } = {}) {
 
   const fn = async (name, params) => {
     calls.push({ name, params });
-    if (name === "plugin.implementers") return ok({ contract: params?.contract, implementers: enabled });
+    if (name === "plugin.implementers") return ok({ id: params?.id, implementers: enabled });
     if (name.startsWith(`plugin.${PROVIDER}.`)) {
       const cmd = name.slice(`plugin.${PROVIDER}.`.length);
       gitCalls.push({ cmd, params });
@@ -79,7 +79,7 @@ const namesNoImplementer = (r) => {
     assert.ok(!c.name.includes("git-core"), `an implementer is named: ${c.name}`);
   }
   assert.ok(
-    r.calls.some((c) => c.name === "plugin.implementers" && c.params?.contract === CONTRACT),
+    r.calls.some((c) => c.name === "plugin.implementers" && c.params?.id === CONTRACT),
     "the provider was never resolved by contract",
   );
 };

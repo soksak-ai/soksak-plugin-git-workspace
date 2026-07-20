@@ -30,7 +30,7 @@ export function makeGit(app, msg) {
   // Resolved on every call: an implementer is enabled and disabled at runtime, so a cached id is a
   // claim about a fact that may already have changed.
   async function provider() {
-    const out = await app.commands.execute("plugin.implementers", { contract: GIT_CONTRACT });
+    const out = await app.commands.execute("plugin.implementers", { id: GIT_CONTRACT });
     if (!out?.ok) return null;
     const found = (out.data?.implementers ?? []).find((i) => i.status === "enabled");
     return found?.id ?? null;
