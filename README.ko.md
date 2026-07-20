@@ -23,10 +23,18 @@ soksak 워크트리 워크스페이스. 한 명령으로 브랜치와 git 워크
 
 `worktree.open`/`close`/`list` 는 git 을 실행하지 않는다. 필요한 git 연산(저장소 루트 판별, 브랜치
 존재 확인, worktree add/list/remove)은 **`soksak-spec-plugin-git`** 에서 온다. 그 계약을 구현한 플러그인은
-**계약으로 찾는다 — 이름으로 찾지 않는다**: 매니페스트가 `consumes: ["soksak-spec-plugin-git"]` 를 선언하고
-구현체는 `plugin.implementers` 로 해소하며, 이 플러그인의 코드에도 매니페스트에도 플러그인 id 는
-등장하지 않는다. 구현체가 바뀌어도 이 플러그인은 그대로다. 활성 구현체가 없으면 loud 하게
-거부한다(`NO_GIT_PROVIDER`) — 빈 워크스페이스 목록으로 답하지 않는다.
+**계약의 identity 로 찾는다 — 이름으로 찾지 않는다**. `plugin.implementers` 를 버전-free 계약 id 를 담은
+`{ id }` 로 호출한 뒤, 결과에서 활성 구현체를 고른다:
+
+```sh
+sok plugin.implementers '{"id":"soksak-spec-plugin-git"}'
+```
+
+발견 호출은 identity 만 싣는다 — 버전 range 를 넘기지 않는다. 매니페스트는
+`consumes: [{ id: "soksak-spec-plugin-git", range: "0.0.1" }]` 를 선언한다 — 버전 range 가 사는 유일한
+곳이며, 그래서 이 플러그인의 코드에도 매니페스트에도 구현체의 플러그인 id 가 없다. 구현체가 바뀌어도
+이 플러그인은 그대로다. 활성 구현체가 없으면 loud 하게 거부한다(`NO_GIT_PROVIDER`) — 빈 워크스페이스
+목록으로 답하지 않는다.
 
 git 을 실행하지 않으므로 **`process` 권한을 갖지 않는다** — 아무것도 스폰할 수 없다. 그게 요점이다:
 git 을 직접 돌리던 시절엔 ref 화이트리스트와 경로 증명을 자기 손으로 들고 있어야 했고, **방어의 중복은

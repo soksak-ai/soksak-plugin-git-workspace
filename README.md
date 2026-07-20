@@ -25,10 +25,19 @@ active / error) on the view status axis.
 
 `worktree.open`/`close`/`list` run no git. The git operations they need — repository root
 discovery, branch existence, worktree add/list/remove — come from **`soksak-spec-plugin-git`**, and the
-plugin that implements it is found **by contract, never by name**: the manifest declares
-`consumes: ["soksak-spec-plugin-git"]`, the implementer is resolved through `plugin.implementers`, and no
-plugin id appears in this plugin's code or manifest. Swap the implementer and nothing here changes.
-No enabled implementer is a loud refusal (`NO_GIT_PROVIDER`), never an empty workspace list.
+plugin that implements it is found **by the contract's identity, never by name**. Call
+`plugin.implementers` with the version-free contract id as `{ id }`, then take the enabled
+implementer from the result:
+
+```sh
+sok plugin.implementers '{"id":"soksak-spec-plugin-git"}'
+```
+
+The discovery call carries identity only — never a version range. The manifest declares
+`consumes: [{ id: "soksak-spec-plugin-git", range: "0.0.1" }]` — the only place a version range
+lives — so no implementer's plugin id appears in this plugin's code or manifest. Swap the
+implementer and nothing here changes. No enabled implementer is a loud refusal
+(`NO_GIT_PROVIDER`), never an empty workspace list.
 
 Because it runs no git, it holds **no `process` permission** — it cannot spawn anything at all.
 That is the point: a plugin that ran git had to carry its own ref whitelist and path proof, and a
