@@ -50,10 +50,9 @@
         },
         "icon": "⎇",
         "placements": [
-          "rail",
           "content"
         ],
-        "defaultPlacement": "rail",
+        "defaultPlacement": "content",
         "status": [
           "loading",
           "empty",
