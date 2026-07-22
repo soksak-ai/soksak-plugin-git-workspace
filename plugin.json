@@ -3,12 +3,12 @@
   "id": "soksak-plugin-git-workspace",
   "name": {
     "en": "Git Workspace",
-    "ko": "\uae43 \uc6cc\ud06c\uc2a4\ud398\uc774\uc2a4"
+    "ko": "깃 워크스페이스"
   },
   "version": "0.0.1",
   "description": {
     "en": "One-shot worktree workspaces: a branch and worktree, its own window with a terminal at the worktree, and reclaim when done. Branches and commits survive close.",
-    "ko": "\uc6d0\uc0f7 \uc6cc\ud06c\ud2b8\ub9ac \uc6cc\ud06c\uc2a4\ud398\uc774\uc2a4 \u2014 \ube0c\ub79c\uce58\uc640 \uc6cc\ud06c\ud2b8\ub9ac, \uc6cc\ud06c\ud2b8\ub9ac\ub97c cwd \ub85c \ud558\ub294 \uc804\uc6a9 \ucc3d\uacfc \ud130\ubbf8\ub110, \uc644\ub8cc \uc2dc \ud68c\uc218. \ub2eb\uc544\ub3c4 \ube0c\ub79c\uce58\uc640 \ucee4\ubc0b\uc740 \uc874\uc18d."
+    "ko": "원샷 워크트리 워크스페이스 — 브랜치와 워크트리, 워크트리를 cwd 로 하는 전용 창과 터미널, 완료 시 회수. 닫아도 브랜치와 커밋은 존속."
   },
   "entry": "main.js",
   "permissions": [
@@ -23,21 +23,21 @@
         "name": "worktree.open",
         "title": {
           "en": "Open a worktree workspace",
-          "ko": "\uc6cc\ud06c\ud2b8\ub9ac \uc6cc\ud06c\uc2a4\ud398\uc774\uc2a4 \uc5f4\uae30"
+          "ko": "워크트리 워크스페이스 열기"
         }
       },
       {
         "name": "worktree.close",
         "title": {
           "en": "Close a worktree workspace",
-          "ko": "\uc6cc\ud06c\ud2b8\ub9ac \uc6cc\ud06c\uc2a4\ud398\uc774\uc2a4 \ub2eb\uae30"
+          "ko": "워크트리 워크스페이스 닫기"
         }
       },
       {
         "name": "worktree.list",
         "title": {
           "en": "List worktree workspaces",
-          "ko": "\uc6cc\ud06c\ud2b8\ub9ac \uc6cc\ud06c\uc2a4\ud398\uc774\uc2a4 \ubaa9\ub85d"
+          "ko": "워크트리 워크스페이스 목록"
         }
       }
     ],
@@ -46,20 +46,30 @@
         "id": "view",
         "title": {
           "en": "Workspaces",
-          "ko": "\uc6cc\ud06c\uc2a4\ud398\uc774\uc2a4"
+          "ko": "워크스페이스"
         },
-        "icon": "\u2387",
+        "icon": "⎇",
         "placements": [
-          "sidebar-right",
+          "rail",
           "content"
         ],
-        "defaultPlacement": "sidebar-right",
+        "defaultPlacement": "rail",
         "status": [
           "loading",
           "empty",
           "active",
           "error"
-        ]
+        ],
+        "sidebar": {
+          "left": [
+            {
+              "contract": "soksak-spec-plugin-sidebar-file-tree",
+              "range": "^0.0.1",
+              "view": "tree",
+              "instance": "shared"
+            }
+          ]
+        }
       }
     ],
     "nodes": [
@@ -67,21 +77,21 @@
         "id": "refresh",
         "description": {
           "en": "Refresh button (reloads the workspace list)",
-          "ko": "\uc0c8\ub85c\uace0\uce68 \ubc84\ud2bc(\uc6cc\ud06c\uc2a4\ud398\uc774\uc2a4 \ubaa9\ub85d \uc7ac\ub85c\ub4dc)"
+          "ko": "새로고침 버튼(워크스페이스 목록 재로드)"
         }
       },
       {
         "id": "row",
         "description": {
           "en": "Workspace row (click = focus its window). data-node=\"row/<slug>\"",
-          "ko": "\uc6cc\ud06c\uc2a4\ud398\uc774\uc2a4 \ud589(\ud074\ub9ad=\ucc3d \ud3ec\ucee4\uc2a4). data-node=\"row/<\uc2ac\ub7ec\uadf8>\""
+          "ko": "워크스페이스 행(클릭=창 포커스). data-node=\"row/<슬러그>\""
         }
       },
       {
         "id": "close",
         "description": {
           "en": "Per-row close button (reclaims the worktree and window). data-node=\"close/<slug>\"",
-          "ko": "\ud589\ubcc4 \ub2eb\uae30 \ubc84\ud2bc(\uc6cc\ud06c\ud2b8\ub9ac\u00b7\ucc3d \ud68c\uc218). data-node=\"close/<\uc2ac\ub7ec\uadf8>\""
+          "ko": "행별 닫기 버튼(워크트리·창 회수). data-node=\"close/<슬러그>\""
         }
       }
     ]
@@ -90,6 +100,10 @@
     {
       "id": "soksak-spec-plugin-git",
       "range": "0.0.1"
+    },
+    {
+      "id": "soksak-spec-plugin-sidebar-file-tree",
+      "range": "^0.0.1"
     }
   ]
 }
